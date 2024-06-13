@@ -1,9 +1,18 @@
 void buck_task(void *pvParameters) {
+
+ //PWM INITIALIZATION
+  ledcSetup(PWM_CHANNEL_C,pwmFrequency,pwmResolution);          //Set PWM Parameters
+  ledcAttachPin(buck_IN, PWM_CHANNEL_C);                        //Set pin as PWM
+  ledcWrite(PWM_CHANNEL_C,PWM);                                 //Write PWM value at startup (duty = 0)
+  pwmMax = pow(2,pwmResolution)-1;                           //Get PWM Max Bit Ceiling
+  pwmMaxLimited = (PWM_MaxDC*pwmMax)/100.000;                //Get maximum PWM Duty Cycle (pwm limiting protection)
+  
   for (;;){
     // print out the value you read:
     Charging_Algorithm();   //TAB#5 - Battery Charging Algorithm
     vTaskDelay(10); // 100ms delay
   }
+
 }
 
 
@@ -68,7 +77,7 @@ void PWM_Modulation(){
     predictivePWM();                                                                 //Runs and computes for predictive pwm floor
     PWM = constrain(PWM,PPWM,pwmMaxLimited);                                         //CHARGER MODE PWM - limit floor to PPWM and ceiling to maximim allowable duty cycle)                                       
   } 
-  ledcWrite(pwmChannel,PWM);                                                         //Set PWM duty cycle and write to GPIO when buck is enabled
+  ledcWrite(PWM_CHANNEL_C,PWM);                                                         //Set PWM duty cycle and write to GPIO when buck is enabled
   buck_Enable();                                                                     //Turn on MPPT buck (IR2104)
 }
      
@@ -82,7 +91,6 @@ void Charging_Algorithm(){
       Serial.print("> Computing For Predictive PWM ");                               //Display serial message 
       for(int i = 0; i<40; i++){Serial.print(".");delay(30);}                        //For loop "loading... effect
       Serial.println("");                                                            //Display a line break on serial for next lines  
-      Read_Sensors();
       predictivePWM();
       PWM = PPWM; 
     }  

@@ -2,9 +2,30 @@
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_MCP23X08.h>
 #include <Adafruit_MCP23X17.h>
-
+#include <ledc.h> // for LED control peripheral
+#include <math.h> // for sin() function
 
 #define USE_MUTEX
+
+// Define LED channel connected to the inverter circuit
+#define PWM_CHANNEL_A 1  // Channel for High-Side MOSFET AC
+#define PWM_CHANNEL_B 2  // Channel for Low-Side MOSFET AC
+#define PWM_CHANNEL_C 0  // Channel for BUCK
+#define PWM_CHANNEL_D 3  // Channel for CoolingFan
+
+// Define timer configuration for 100kHz PWM
+#define TIMER_SOURCE_CLK TIMER_CLK_APB
+#define TIMER_DIVIDER  80  // Adjust to achieve desired frequency (calculate based on clock source)
+
+// Define constants (adjust based on your setup)
+#define PWM_FREQUENCY 100000  // 100 kHz carrier frequency
+#define SAMPLING_FREQUENCY 1000000  // 1 MHz sampling frequency
+#define ADC_RESOLUTION 10  // Adjust if using a different ADC resolution
+#define DEAD_TIME_CYCLES 10  // Adjust based on IRF3205 datasheet
+
+// Global LUTs (place holders for actual storage)
+lut_entry_t shared_lut[LUT_SIZE];
+lut_entry_t local_lut[LOCAL_LUT_SIZE]; // Previously implemented local LUT
 
 #define SDA_PIN 41 // GPIO 41
 #define SCL_PIN 40 // GPIO 40
@@ -24,6 +45,10 @@
 #define AC_1_LOG 5        //AC RETURN
 #define SOL_LOG 6         //Solar panel enable
 #define BAT_LOG 7         //Battery to inverter circuit
+#define IN1_PIN  10  // Replace with actual pin assignment (IO10)
+#define IN2_PIN  11  // Replace with actual pin assignment (IO11)
+#define buck_IN  12  // Replace with actual pin assignment (IO11)
+#define fanPin  13  // Replace with actual pin assignment (IO11)
 
 //ADC objects
 Adafruit_ADS1015 ads1; // Initialize with address 0x48
@@ -46,6 +71,7 @@ softApssid[] = "esp32";
 //=================================================================================================//
 bool                                  
 MPPT_Mode               = 1,           //   USER PARAMETER - Enable MPPT algorithm, when disabled charger uses CC-CV algorithm 
+enableINVERTER          = 0,           //   USER PARAMETER - Enable INVERTER
 output_Mode             = 1,           //   USER PARAMETER - 0 = PSU MODE, 1 = Charger Mode  
 disableFlashAutoLoad    = 1,           //   USER PARAMETER - Forces the MPPT to not use flash saved settings, enabling this "1" defaults to programmed firmware settings.
 enablePPWM              = 1,           //   USER PARAMETER - Enables Predictive PWM, this accelerates regulation speed (only applicable for battery charging application)
@@ -60,6 +86,9 @@ int
 serialTelemMode         = 1,           //  USER PARAMETER - Selects serial telemetry data feed (0 - Disable Serial, 1 - Display All Data, 2 - Display Essential, 3 - Number only)
 pwmResolution           = 11,          //  USER PARAMETER - PWM Bit Resolution 
 pwmFrequency            = 39000,       //  USER PARAMETER - PWM Switching Frequency - Hz (For Buck)
+fanPwm                  = 0,
+fanpwmFrequency         = 1000,
+fanpwmResolution        = 8,
 temperatureFan          = 60,          //  USER PARAMETER - Temperature threshold for fan to turn on
 temperatureMax          = 90,          //  USER PARAMETER - Overtemperature, System Shudown When Exceeded (deg C)
 telemCounterReset       = 0,           //  USER PARAMETER - Reset Telem Data Every (0 = Never, 1 = Day, 2 = Week, 3 = Month, 4 = Year) 
@@ -95,7 +124,8 @@ avgCountTS              = 500;        //  CALIB PARAMETER - Temperature Sensor A
 float
 inVoltageDivRatio       = 8.308,    //  CALIB PARAMETER - Input voltage divider sensor ratio (change this value to calibrate voltage sensor)
 outVoltageDivRatio      = 8.308,    //  CALIB PARAMETER - Output voltage divider sensor ratio (change this value to calibrate voltage sensor)
-vOutSystemMax           = 16.0000,    //  CALIB PARAMETER - 
+acOutVoltageDivRatio    = 1.000,
+vOutSystemMax           = 30.0000,    //  CALIB PARAMETER - 
 cOutSystemMax           = 50.0000,    //  CALIB PARAMETER - 
 ntcResistance           = 100000.00,   //  CALIB PARAMETER - NTC temp sensor's resistance. Change to 10000.00 if you are using a 10k NTC
 voltageDropout          = 1.0000,     //  CALIB PARAMETER - Buck regulator's dropout voltage (DOV is present due to Max Duty Cycle Limit)
@@ -109,6 +139,9 @@ currentMidPoint         = 2.495,     //  CALIB PARAMETER - Current Sensor Midpoi
 currentSens             = 0.0000,     //  CALIB PARAMETER - Current Sensor Sensitivity (V/A)
 currentSensV            = 0.0660,     //  CALIB PARAMETER - Current Sensor Sensitivity (mV/A)
 vInSystemMin            = 10.000,     //  CALIB PARAMETER - 
+acMinRmsVoltage         = 210,
+acMaxRmsVoltage         = 240,
+targetAcRMSVoltage      = 220,
 maxPowerVin             =18.000;      //input voltage at which solar panel power maxes out
 
 //===================================== SYSTEM PARAMETERS =========================================//
@@ -146,11 +179,17 @@ OUV                   = 0,           // SYSTEM PARAMETER -
 OOV                   = 0,           // SYSTEM PARAMETER - 
 OOC                   = 0,           // SYSTEM PARAMETER - 
 OTE                   = 0,           // SYSTEM PARAMETER - 
+ACOUV                 = 0,            //Ac out under voltage
+ACOOV                 = 0,            //AC over voltage
+ACOUI                 = 0,            //Ac out over current
+ACOUF                 = 0,            //Ac out under frequency
+ACOOF                 = 0,            //Ac out OVER frequency
 SEARCH                = 0;
 int
 inputSource           = 0,           // SYSTEM PARAMETER - 0 = MPPT has no power source, 1 = MPPT is using solar as source, 2 = MPPTis using battery as power source
 avgStoreTS            = 0,           // SYSTEM PARAMETER - Temperature Sensor uses non invasive averaging, this is used an accumulator for mean averaging
-temperature           = 0,           // SYSTEM PARAMETER -
+temperature1          = 0,           // SYSTEM PARAMETER -
+temperature2          = 0,           // SYSTEM PARAMETER -
 sampleStoreTS         = 0,           // SYSTEM PARAMETER - TS AVG nth Sample
 pwmMax                = 0,           // SYSTEM PARAMETER -
 pwmMaxLimited         = 0,           // SYSTEM PARAMETER -
@@ -164,13 +203,27 @@ subMenuPage           = 0,           // SYSTEM PARAMETER -
 ERR                   = 0,           // SYSTEM PARAMETER - 
 conv1                 = 0,           // SYSTEM PARAMETER -
 conv2                 = 0,           // SYSTEM PARAMETER -
+noacsampledata        = 2500,
+acfrequency           = 50,
 intTemp               = 0;           // SYSTEM PARAMETER -
 float
 VSI                   = 0.0000,      // SYSTEM PARAMETER - Raw input voltage sensor ADC voltage
 VSO                   = 0.0000,      // SYSTEM PARAMETER - Raw output voltage sensor ADC voltage
 CSI                   = 0.0000,      // SYSTEM PARAMETER - Raw current sensor ADC voltage
 CSI_converted         = 0.0000,      // SYSTEM PARAMETER - Actual current sensor ADC voltage 
-TS                    = 0.0000,      // SYSTEM PARAMETER - Raw temperature sensor ADC value
+TS1                   = 0.0000,      // SYSTEM PARAMETER - Raw temperature sensor ADC value
+TS2                   = 0.0000,      // SYSTEM PARAMETER - Raw temperature sensor ADC value
+ACVSO                 = 0.0000,
+ACCSO                 = 0.0000,
+VS24V                 = 0.0000,
+IS12V                 = 0.0000,
+IS24V                 = 0.0000,
+voltage12bus          = 0.0000,
+voltage24bus          = 0.0000,
+powerOutput12         = 0.0000,
+powerOutput24         = 0.0000,
+voltageOutputAc       = 0.0000,
+voltageOutputAcRms    = 0.0000,
 powerInput            = 0.0000,      // SYSTEM PARAMETER - Input power (solar power) in Watts
 powerInputPrev        = 0.0000,      // SYSTEM PARAMETER - Previously stored input power variable for MPPT algorithm (Watts)
 powerOutput           = 0.0000,      // SYSTEM PARAMETER - Output power (battery or charing power in Watts)
@@ -180,7 +233,8 @@ voltageInputPrev      = 0.0000,      // SYSTEM PARAMETER - Previously stored inp
 voltageOutput         = 0.0000,      // SYSTEM PARAMETER - Input voltage (battery voltage)
 currentInput          = 0.0000,      // SYSTEM PARAMETER - Output power (battery or charing voltage)
 currentOutput         = 0.0000,      // SYSTEM PARAMETER - Output current (battery or charing current in Amperes)
-Rntc                 = 0.0000,      // SYSTEM PARAMETER - Part of NTC thermistor thermal sensing code
+Rntc1                 = 0.0000,      // SYSTEM PARAMETER - Part of NTC thermistor thermal sensing code
+Rntc2                 = 0.0000,      // SYSTEM PARAMETER - Part of NTC thermistor thermal sensing code
 ADC_BitReso           = 0.0000,      // SYSTEM PARAMETER - System detects the approriate bit resolution factor for ADS1015/ADS1115 ADC
 daysRunning           = 0.0000,      // SYSTEM PARAMETER - Stores the total number of days the MPPT device has been running since last powered
 Wh                    = 0.0000,      // SYSTEM PARAMETER - Stores the accumulated energy harvested (Watt-Hours)
@@ -190,6 +244,10 @@ loopTime              = 0.0000,      // SYSTEM PARAMETER -
 outputDeviation       = 0.0000,      // SYSTEM PARAMETER - Output Voltage Deviation (%)
 buckEfficiency        = 0.0000,      // SYSTEM PARAMETER - Measure buck converter power conversion efficiency (only applicable to my dual current sensor version)
 floatTemp             = 0.0000,
+floatTemp2             = 0.0000,
+feedbackfrequency     = 0.0000,
+acrmsvoltage          = 0.0000,
+acrmscurrent          = 0.0000,
 vOutSystemMin         = 0.0000;     //  CALIB PARAMETER - 
 unsigned long 
 currentErrorMillis    = 0,           //SYSTEM PARAMETER -
@@ -212,6 +270,22 @@ loopTimeStart         = 0,           //SYSTEM PARAMETER - Used for the loop cycl
 loopTimeEnd           = 0,           //SYSTEM PARAMETER - Used for the loop cycle stop watch, records the loop end time
 secondsElapsed        = 0;           //SYSTEM PARAMETER - 
 
+// Define data struct for ac voltage and current
+ typedef struct {
+    float acvoltage;
+    float accurrent;
+    unsigned long acsamplingTime;
+} acsampleData_t;
+
+acsampleData_t* acdataArray = new acsampleData_t[noacsampledata];
+
+typedef struct {
+    float ac_voltage_errorCorrection;
+    float associated_period_ratio;
+} errorData_t;
+
+errorData_t* errordataArray = new errorData_t[noacsampledata/frequency];
+
 // Function prototypes for the tasks
 void error_handling_task(void *pvParameters);
 void sensor_acquisition_task(void *pvParameters);
@@ -220,8 +294,9 @@ void inverter_task(void *pvParameters);
 void ac_feedback_task(void *pvParameters);
 
 // Task handle
-TaskHandle_t protection_task;
-TaskHandle_t sensor_acquisition_task;
+TaskHandle_t protection_task_handle;
+TaskHandle_t sensor_acquisition_task_handle;
+TaskHandle_t inverter_task_handle;
 
 // Mutex for shared resources
 SemaphoreHandle_t shared_lut_mutex;
@@ -230,7 +305,7 @@ void setup() {
   Serial.begin(115200); //Our lovely cereal
   Wire.begin(SDA_PIN, SCL_PIN);
   
-
+  ADC_SetGain();
   // Initialize ADS1 with the default address 0x48
   if (!ads1.begin()) {
     Serial.println("Failed to initialize ADS1.");
@@ -276,6 +351,14 @@ void setup() {
     shared_lut_mutex = xSemaphoreCreateMutex();
   #endif
   
+  esp_partition_t lut_partition = esp_partition_find(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY);
+  if (lut_partition) {
+    // Read LUT data from flash into global 'shared_lut' variable
+    // ... (implementation details for flash read using partition API)
+  } else {
+    // Handle error: LUT partition not found
+  }
+
    // Create the tasks
   xTaskCreatePinnedToCore(
     protection_task
@@ -283,7 +366,7 @@ void setup() {
     , 2048
     , NULL
     , 6
-    , &protection_task
+    , &protection_task_handle
     , 1 
   );
 
@@ -293,7 +376,7 @@ void setup() {
     , 2048
     , NULL
     , 6
-    , &sensor_acquisition_task
+    , &sensor_acquisition_task_handle
     , 0 
   );
 
@@ -321,7 +404,7 @@ void setup() {
     , 2048
     , NULL
     , 5
-    , &inverter_task
+    , &inverter_task_handle
     , 1 
   );
 

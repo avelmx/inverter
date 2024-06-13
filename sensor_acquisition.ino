@@ -2,10 +2,8 @@
 void sensor_acquisition_task(void *pvParameters) {
   
   for (;;){
-    // print out the value you read:
-    
-   
-    vTaskDelay(1000); // 100ms delay
+    Read_Sensors();         //TAB#2 - Sensor data measurement and computation
+    vTaskDelay(100); // 100ms delay
   }
 }
 
@@ -51,33 +49,48 @@ void Read_Sensors(){
 
   /////////// TEMPERATURE SENSOR /////////////
   if(sampleStoreTS<=avgCountTS){                               //TEMPERATURE SENSOR - Lite Averaging
-    TS = TS + analogRead(TempSensor);
+    TS1 = TS1 + ads2.readADC_SingleEnded(1);
+    TS2 = TS2 + ads2.readADC_SingleEnded(2);
     sampleStoreTS++;   
   }
   else{
-    TS = TS/sampleStoreTS;
-    Rntc = 1000*((TS*9.1)/(3.3-0.001*TS));
-    temperature = (1/((1/298.15)+((2.303/4000)*(log(Rntc/100000)))))-273.15;
+    TS1 = TS1/sampleStoreTS;
+    TS2 = TS2/sampleStoreTS;
+    Rntc1 = 1000*((TS1*9.1)/(3.3-0.001*TS1));
+    Rntc2 = 1000*((TS2*9.1)/(3.3-0.001*TS2));
+    temperature1 = (1/((1/298.15)+((2.303/4000)*(log(Rntc1/100000)))))-273.15;
+    temperature2 = (1/((1/298.15)+((2.303/4000)*(log(Rntc2/100000)))))-273.15;
     sampleStoreTS = 0;
-    TS = 0;
+    TS1 = 0;
+    TS2 = 0;
   }
   /////////// VOLTAGE & CURRENT SENSORS /////////////
   VSI = 0.0000;      //Clear Previous Input Voltage 
   VSO = 0.0000;      //Clear Previous Output Voltage  
-  CSI = 0.0000;      //Clear Previous Current  
+  CSI = 0.0000;      //Clear Previous Current 
+  VS24V = 0.0000; 
+  ACVSO = 0.0000; 
+  IS12V = 0.0000; 
+  IS24V = 0.0000; 
 
   //VOLTAGE SENSOR - Instantenous Averaging   
   for(int i = 0; i<avgCountVS; i++){
     VSI = VSI + ads1.computeVolts(ads1.readADC_SingleEnded(3));
     VSO = VSO + ads1.computeVolts(ads1.readADC_SingleEnded(1));
+    VS24V = VS24V + ads1.computeVolts(ads3.readADC_SingleEnded(1));
   }
   voltageInput  = (VSI/avgCountVS)*inVoltageDivRatio; 
-  voltageOutput = (VSO/avgCountVS)*outVoltageDivRatio; 
+  voltageOutput = (VSO/avgCountVS)*outVoltageDivRatio;
+  voltageOutputAc = (ACVSO/avgCountVS)*acOutVoltageDivRatio;
+  voltage24bus = (VS24V/avgCountVS)*outVoltageDivRatio;
 
   
   //CURRENT SENSOR - Instantenous Averaging   
   for(int i = 0; i<avgCountCS; i++){
     CSI = CSI + ads1.computeVolts(ads1.readADC_SingleEnded(2));
+    IS12V = IS12V + ads3.computeVolts(ads3.readADC_SingleEnded(0));
+    IS24V = IS24V + ads3.computeVolts(ads3.readADC_SingleEnded(1));
+    ACCSO = ACCSO + ads1.computeVolts(ads1.readADC_SingleEnded(1));
   }
   CSI_converted = (CSI/avgCountCS)*1.3300;
   currentInput  = ((CSI_converted-currentMidPoint)*-1)/currentSensV;  

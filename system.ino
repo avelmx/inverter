@@ -1,7 +1,12 @@
 void system_task(void *pvParameters) {
+  ledcSetup(PWM_CHANNEL_D,fanpwmFrequency,fanpwmResolution);          //Set PWM Parameters
+  ledcAttachPin(fanPin, PWM_CHANNEL_D);                        //Set pin as PWM
+  ledcWrite(PWM_CHANNEL_D,fanPWM);   
+
   for (;;){
      System_Processes();     //TAB#4 - Routine system processes 
      Onboard_Telemetry();    //TAB#6 - Onboard telemetry (USB & Serial Telemetry)
+     vTaskDelay(1000); // 100ms delay
   }   
 }
 
@@ -11,14 +16,20 @@ void System_Processes(){
   if(enableFan==true){
     if(enableDynamicCooling==false){                                   //STATIC PWM COOLING MODE (2-PIN FAN - no need for hysteresis, temp data only refreshes after 'avgCountTS' or every 500 loop cycles)                       
       if(overrideFan==true){fanStatus=true;}                           //Force on fan
-      else if(temperature>=temperatureFan){fanStatus=1;}               //Turn on fan when set fan temp reached
-      else if(temperature<temperatureFan){fanStatus=0;}                //Turn off fan when set fan temp reached
-      mcp.digitalWrite(FAN,fanStatus);                                     //Send a digital signal to the fan MOSFET
+      else if((temperature1>=temperatureFan || temperature2>=temperatureFan) && fanPWM < 256)
+      {
+        fanPWM++;
+      }               //Turn on fan when set fan temp reached
+      else if((temperature1<=temperatureFan || temperature2<=temperatureFan) && fanPWM > 0)
+      {
+        fanPWM--;
+      }                //Turn off fan when set fan temp reached
+                                           //Send a digital signal to the fan MOSFET
     }
     else{}                                                             //DYNAMIC PWM COOLING MODE (3-PIN FAN - coming soon)
   }
-  else{mcp.digitalWrite(FAN,LOW);}                                         //Fan Disabled
-  
+  else{}                                         //Fan Disabled
+  ledcWrite(PWM_CHANNEL_D,fanPWM); 
   //////////// LOOP TIME STOPWATCH ////////////
   loopTimeStart = micros();                                            //Record Start Time
   loopTime = (loopTimeStart-loopTimeEnd)/1000.000;                     //Compute Loop Cycle Speed (mS)
@@ -77,7 +88,8 @@ void Onboard_Telemetry(){
           Serial.print(" CI:");    Serial.print(currentInput,2); 
           Serial.print(" CO:");    Serial.print(currentOutput,2); 
           Serial.print(" Wh:");    Serial.print(Wh,2); 
-          Serial.print(" Temp:");  Serial.print(temperature);  
+          Serial.print(" Temp1:");  Serial.print(temperature1);
+          Serial.print(" Temp2:");  Serial.print(temperature1);  
           Serial.print(" "); 
           Serial.print(" CSMPV:"); Serial.print(currentMidPoint,3);  
           Serial.print(" CSV:");   Serial.print(CSI_converted,3);   
@@ -96,7 +108,8 @@ void Onboard_Telemetry(){
           Serial.print(" CI:");    Serial.print(currentInput,2); 
           Serial.print(" CO:");    Serial.print(currentOutput,2); 
           Serial.print(" Wh:");    Serial.print(Wh,2); 
-          Serial.print(" Temp:");  Serial.print(temperature,1);  
+          Serial.print(" Temp1:");  Serial.print(temperature1);
+          Serial.print(" Temp2:");  Serial.print(temperature1); 
           Serial.print(" EN:");    Serial.print(buckEnable);
           Serial.print(" FAN:");   Serial.print(fanStatus);   
           Serial.print(" SOC:");   Serial.print(batteryPercent);Serial.print("%"); 
@@ -111,7 +124,8 @@ void Onboard_Telemetry(){
           Serial.print(" ");       Serial.print(currentInput,2); 
           Serial.print(" ");       Serial.print(currentOutput,2);   
           Serial.print(" ");       Serial.print(Wh,2); 
-          Serial.print(" ");       Serial.print(temperature,1);  
+          Serial.print(" Temp1:");  Serial.print(temperature1);
+          Serial.print(" Temp2:");  Serial.print(temperature1);   
           Serial.print(" ");       Serial.print(buckEnable);
           Serial.print(" ");       Serial.print(fanStatus);   
           Serial.print(" ");       Serial.print(batteryPercent);
