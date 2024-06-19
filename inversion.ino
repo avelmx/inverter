@@ -1,63 +1,44 @@
 
 void inverter_task(void *pvParameters) {
-  // Configure LED control peripheral (LEDC) for PWM generation
-  ledc_timer_config_t ledc_timer_config = {
-    .speed_mode = LEDC_LOW_SPEED_MODE,
-    .duty_resolution = ADC_RESOLUTION,  // 8 bits for 256 possible duty cycle values (0-255)
-    .timer_source = TIMER_SOURCE_CLK,
-    .clk_cfg = LEDC_CLK_APB_DIV,  // Use APB clock divided by 'timer_divider'
-    .tick_freq = ESP_CLK_MHZ * 1000000, // Set base timer frequency (1 MHz here)
-    .divider = TIMER_DIVIDER,
-  };
-ledc_timer_config(PWM_CHANNEL_A, &ledc_timer_config);
-ledc_timer_config(PWM_CHANNEL_B, &ledc_timer_config);
-
-  // Configure LED channel
-  ledc_channel_config_t ledc_channel_config = {
-    .channel = LEDC_CHANNEL,
-    .duty = 0,
-    .gpio_intr_type = LEDC_INTR_DISABLE,
-    .duty_scale = LEDC_DUTY_SCALE_1,
-    .sig_out_mode = LEDC_SIG_OUT_MODE_DISABLE,
-    .idle_level = 0,
-    .flags = LEDC_CHAN_DEFAULT,
-  };
-ledc_channel_config(PWM_CHANNEL_A, &ledc_channel_config);
-ledc_channel_config(PWM_CHANNEL_B, &ledc_channel_config);
-
+  
   // Initialize variables
   float sine_value = 0;  // Replace with logic to get sampled sine wave value (ADC reading)
   int duty_cycle = 0;
+  wakeprotectionTask();
 
   // Start LED channel
+  ledcSetup(PWM_CHANNEL_A,PWM_FREQUENCY,ADC_RESOLUTION);          //Set PWM Parameters
+  ledcSetup(PWM_CHANNEL_B,PWM_FREQUENCY,ADC_RESOLUTION);          //Set PWM Parameters
   ledcAttachPin(IN1_PIN, PWM_CHANNEL_A);  
   ledcAttachPin(IN2_PIN, PWM_CHANNEL_B); 
-  ledc_channel_start(PWM_CHANNEL_A);
-  ledc_channel_start(PWM_CHANNEL_B);
 
   while (true) {
     unsigned long runningTime = millis(); // Current running time in milliseconds
+    if(enableACload==true && ACinitialize == true){
+      initializingTime = millis(); 
+      ACinitialize = false;
+    }
+    if(((initializingTime - runningTime) > 10000) && inverterEnable == true && enableACload == true){takeACload(); }
     // Calculate duty cycle using LUT function
-    duty_cycle =  calculateDutyCycle(runningTime, frequency);
-
+    duty_cycle =  calculateDutyCycle(runningTime, acfrequency);
+    if(xSemaphoreTake(shared_lut_mutex, 0) == pdTRUE){
+      duty_cycle = duty_cycle + returnerror((runningTime % (1/acfrequency)) / (1/acfrequency));
+       xSemaphoreGive(shared_lut_mutex);
+    }
     // Apply dead time
-    if (duty_cycle >= 0) {
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, PWM_CHANNEL_A, duty_cycle);
-      delayMicroseconds(DEAD_TIME_CYCLES);
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, PWM_CHANNEL_B, 0);  // Turn off low-side MOSFET
-    } else if (duty_cycle < 0) {
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, PWM_CHANNEL_B, abs(duty_cycle));  // Use absolute value for low-side
-      delayMicroseconds(DEAD_TIME_CYCLES);
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, PWM_CHANNEL_A, 0);  // Turn off high-side MOSFET
+    if (duty_cycle >= 0 && inverterEnable) {
+       ledcWrite( PWM_CHANNEL_A, duty_cycle);
+      vTaskDelay(pdMS_TO_TICKS(DEAD_TIME_CYCLES));
+       ledcWrite( PWM_CHANNEL_B, 0);  // Turn off low-side MOSFET
+    } else if (duty_cycle < 0 && inverterEnable) {
+       ledcWrite( PWM_CHANNEL_B, abs(duty_cycle));  // Use absolute value for low-side
+      vTaskDelay(pdMS_TO_TICKS(DEAD_TIME_CYCLES));
+       ledcWrite( PWM_CHANNEL_A, 0);  // Turn off high-side MOSFET
     } else {
       // Handle zero output condition (optional)
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, PWM_CHANNEL_A, 0);
-      ledc_set_duty(LEDC_LOW_SPEED_MODE, PWM_CHANNEL_B, 0);
+       ledcWrite( PWM_CHANNEL_A, 0);
+       ledcWrite( PWM_CHANNEL_B, 0);
     }
-
-    // Set LED channel duty cycle
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_A, duty_cycle);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_B, duty_cycle);
 
     // Delay for PWM frequency
     int delay_ms = 1 / (PWM_FREQUENCY / 1000); // Delay in milliseconds
@@ -65,12 +46,57 @@ ledc_channel_config(PWM_CHANNEL_B, &ledc_channel_config);
   }
 }
 
+void inverter_Enable(){                                                                  //Enable MPPT Buck Converter
+  inverterEnable = 1;
+  mcp.digitalWrite(GPIO16,HIGH);
+  mcp.digitalWrite(GPIO17,HIGH);
+}
+
+void inverter_Disable(){                                                                 //Disable MPPT Buck Converter
+  inverterEnable = 0; 
+  mcp.digitalWrite(GPIO16,LOW);
+  mcp.digitalWrite(GPIO17,LOW);
+  enableACload = 0;
+} 
+
+void takeACload(){
+  mcp.digitalWrite(AC_1_LOG,HIGH);
+  mcp.digitalWrite(AC_2_LOG,HIGH);
+}
+
+float returnerror(float associatedtime){
+  if(enableActiveControl == 1){
+    float storederror;
+    for(int i = 0; i<(noacsampledata/acfrequency); i++){
+      if(associatedtime <= errordataArray[0].associated_period_ratio){
+        float firsterrordiff = errordataArray[1].ac_voltage_errorCorrection - errordataArray[0].ac_voltage_errorCorrection;
+        float timeratio = associatedtime/(errordataArray[1].associated_period_ratio - errordataArray[0].associated_period_ratio);
+        storederror = errordataArray[0].ac_voltage_errorCorrection - (firsterrordiff * timeratio);
+      }
+      else if(associatedtime >= errordataArray[noacsampledata/acfrequency - 1].associated_period_ratio){
+        float lasterrordiff = errordataArray[noacsampledata/acfrequency - 1].ac_voltage_errorCorrection - errordataArray[noacsampledata/acfrequency - 2].ac_voltage_errorCorrection;
+        float timeratio = associatedtime/(errordataArray[noacsampledata/acfrequency - 1].associated_period_ratio - errordataArray[noacsampledata/acfrequency - 2].associated_period_ratio);
+        storederror = errordataArray[noacsampledata/acfrequency - 1].ac_voltage_errorCorrection + (lasterrordiff * timeratio);
+      }
+      else if(errordataArray[i].associated_period_ratio <= associatedtime && errordataArray[i+1].associated_period_ratio >= associatedtime){
+        float firsterrordiff = errordataArray[i].ac_voltage_errorCorrection - errordataArray[i + 1].ac_voltage_errorCorrection;
+        float timeratio = associatedtime/(errordataArray[i].associated_period_ratio - errordataArray[i + 1].associated_period_ratio);
+        storederror = errordataArray[i].ac_voltage_errorCorrection + (firsterrordiff * timeratio);
+      }
+    }
+  
+    float pidreturn = pidcontrol(storederror, kp, ki, kd);
+    return pidreturn;
+  } else{
+    return 0;
+  }
+}
 
 
 // Function to calculate duty cycle
 float calculateDutyCycle(unsigned long runningTime, float frequency) {
     // Calculate the period of the sine wave
-    float period = 1.0 / frequency;   
+    unsigned long period = 1.0 / frequency;   
     // Calculate the time for one half of the sine wave (from 0 to peak)
     float halfPeriod = period / 2.0;   
     // Calculate the number of complete cycles in the running time
@@ -92,5 +118,22 @@ float calculateDutyCycle(unsigned long runningTime, float frequency) {
     return duty_cycle;
 }
 
+
+float pidcontrol(float error, float kp, float ki, float kd) {
+  // Calculate error terms
+  static float error_prev = 0.0f;  // Stores previous error for integral term
+  float error_integral = error_prev + error; // Simple summation for integral term
+
+  // Update previous error for next iteration
+  error_prev = error;
+
+  // Calculate PID output
+  float output = kp * error + ki * error_integral + kd * (error - error_prev);
+
+  // Limit output (optional)
+  // ... (implement logic to limit output if necessary)
+
+  return output;
+}
 
 

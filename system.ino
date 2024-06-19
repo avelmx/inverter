@@ -4,9 +4,8 @@ void system_task(void *pvParameters) {
   ledcWrite(PWM_CHANNEL_D,fanPWM);   
 
   for (;;){
-     System_Processes();     //TAB#4 - Routine system processes 
-     Onboard_Telemetry();    //TAB#6 - Onboard telemetry (USB & Serial Telemetry)
-     vTaskDelay(1000); // 100ms delay
+    System_Processes();     //TAB#4 - Routine system processes 
+    webSocket.loop();
   }   
 }
 
@@ -48,92 +47,166 @@ void System_Processes(){
 }
 
 
-void Onboard_Telemetry(){
-   /////////////////////// USB SERIAL DATA TELEMETRY ////////////////////////   
-      // 0 - Disable Serial
-      // 1 - Display All
-      // 2 - Display Essential Data
-      // 3 - Display Numbers Only 
+void handleLogin(AsyncWebServerRequest *request) {
+  if (request->hasParam("username", true) && request->hasParam("password", true)) {
+    String usernameParam = request->getParam("username", true)->value();
+    String passwordParam = request->getParam("password", true)->value();
 
-      currentSerialMillis = millis();
-      if(currentSerialMillis-prevSerialMillis>=millisSerialInterval){   //Run routine every millisRoutineInterval (ms)
-        prevSerialMillis = currentSerialMillis;                         //Store previous time
-
-        if(serialTelemMode==0){}
-    //  else if(chargingPause==1){Serial.println("CHARGING PAUSED");}   // Charging paused message
-        else if(serialTelemMode==1){                                    // 1 - Display All                           
-          Serial.print(" ERR:");   Serial.print(ERR);
-          Serial.print(" FLV:");   Serial.print(FLV);  
-          Serial.print(" BNC:");   Serial.print(BNC);  
-          Serial.print(" IUV:");   Serial.print(IUV); 
-          Serial.print(" IOC:");   Serial.print(IOC); 
-          Serial.print(" OOV:");   Serial.print(OOV); 
-          Serial.print(" OOC:");   Serial.print(OOC);
-          Serial.print(" OTE:");   Serial.print(OTE); 
-          Serial.print(" REC:");   Serial.print(REC);
-          Serial.print(" MPPTA:"); Serial.print(MPPT_Mode);     
-          Serial.print(" CM:");    Serial.print(output_Mode);   //Charging Mode
-          
-          Serial.print(" "); 
-          Serial.print(" BYP:");   Serial.print(bypassEnable);
-          Serial.print(" EN:");    Serial.print(buckEnable);
-          Serial.print(" FAN:");   Serial.print(fanStatus);    
-          Serial.print(" WiFi:");  Serial.print(WIFI);      
-          Serial.print(" ");  
-          Serial.print(" PI:");    Serial.print(powerInput,0); 
-          Serial.print(" PWM:");   Serial.print(PWM); 
-          Serial.print(" PPWM:");  Serial.print(PPWM); 
-          Serial.print(" VI:");    Serial.print(voltageInput,1); 
-          Serial.print(" VO:");    Serial.print(voltageOutput,1); 
-          Serial.print(" CI:");    Serial.print(currentInput,2); 
-          Serial.print(" CO:");    Serial.print(currentOutput,2); 
-          Serial.print(" Wh:");    Serial.print(Wh,2); 
-          Serial.print(" Temp1:");  Serial.print(temperature1);
-          Serial.print(" Temp2:");  Serial.print(temperature1);  
-          Serial.print(" "); 
-          Serial.print(" CSMPV:"); Serial.print(currentMidPoint,3);  
-          Serial.print(" CSV:");   Serial.print(CSI_converted,3);   
-          Serial.print(" VO%Dev:");Serial.print(outputDeviation,1);   
-          Serial.print(" SOC:");   Serial.print(batteryPercent);Serial.print("%"); 
-          Serial.print(" T:");     Serial.print(secondsElapsed); 
-          Serial.print(" LoopT:"); Serial.print(loopTime,3);Serial.print("ms");  
-          Serial.println("");    
-        }
-        else if(serialTelemMode==2){ // 2 - Display Essential Data
-          Serial.print(" PI:");    Serial.print(powerInput,0); 
-          Serial.print(" PWM:");   Serial.print(PWM); 
-          Serial.print(" PPWM:");  Serial.print(PPWM); 
-          Serial.print(" VI:");    Serial.print(voltageInput,1); 
-          Serial.print(" VO:");    Serial.print(voltageOutput,1); 
-          Serial.print(" CI:");    Serial.print(currentInput,2); 
-          Serial.print(" CO:");    Serial.print(currentOutput,2); 
-          Serial.print(" Wh:");    Serial.print(Wh,2); 
-          Serial.print(" Temp1:");  Serial.print(temperature1);
-          Serial.print(" Temp2:");  Serial.print(temperature1); 
-          Serial.print(" EN:");    Serial.print(buckEnable);
-          Serial.print(" FAN:");   Serial.print(fanStatus);   
-          Serial.print(" SOC:");   Serial.print(batteryPercent);Serial.print("%"); 
-          Serial.print(" T:");     Serial.print(secondsElapsed); 
-          Serial.print(" LoopT:"); Serial.print(loopTime,3);Serial.print("ms");  
-          Serial.println("");    
-        }  
-        else if(serialTelemMode==3){ // 3 - Display Numbers Only 
-          Serial.print(" ");       Serial.print(powerInput,0); 
-          Serial.print(" ");       Serial.print(voltageInput,1); 
-          Serial.print(" ");       Serial.print(voltageOutput,1); 
-          Serial.print(" ");       Serial.print(currentInput,2); 
-          Serial.print(" ");       Serial.print(currentOutput,2);   
-          Serial.print(" ");       Serial.print(Wh,2); 
-          Serial.print(" Temp1:");  Serial.print(temperature1);
-          Serial.print(" Temp2:");  Serial.print(temperature1);   
-          Serial.print(" ");       Serial.print(buckEnable);
-          Serial.print(" ");       Serial.print(fanStatus);   
-          Serial.print(" ");       Serial.print(batteryPercent);
-          Serial.print(" ");       Serial.print(secondsElapsed); 
-          Serial.print(" ");       Serial.print(loopTime,3);
-          Serial.print(" ");       Serial.println("");    
-        }  
-
-      } 
-
+    if (usernameParam == "avel" && passwordParam == "1526") {
+      loggedIn = true;
+      request->send(200, "text/plain", "Login successful. Redirecting to firmware update...");
+    } else {
+      request->send(403, "text/plain", "Login failed. Invalid credentials.");
+    }
+  } else {
+    request->send(400, "text/plain", "Bad Request");
+  }
 }
+
+void handleFirmwareUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  if (!loggedIn) {
+    request->send(403, "text/plain", "Access denied. Please log in first.");
+    return;
+  }
+
+  if (!index) {
+    Serial.println("Receiving firmware update...");
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  }
+
+  if (len) {
+    if (Update.write(data, len) != len) {
+      Update.printError(Serial);
+    }
+  }
+
+  if (final) {
+    if (Update.end(true)) {
+      request->send(200, "text/plain", "Update success. Rebooting...");
+      ESP.restart();
+    } else {
+      request->send(500, "text/plain", "Update failed");
+    }
+  }
+}
+
+StaticJsonDocument<200> jsonMessage;
+
+void updateParameters(){
+  
+// Fill the JSON object with parameter values
+jsonMessage["VI"] = voltageInput;
+jsonMessage["CI"] = currentInput;
+jsonMessage["VO"] = voltageOutput;
+jsonMessage["PI"] = powerInput;
+jsonMessage["Buck"] = buckEnable;
+jsonMessage["Error"] = ERR;
+jsonMessage["Mppta"] = MPPT_Mode;
+
+// Convert the JSON object to a string
+String jsonString;
+serializeJson(jsonMessage, jsonString);
+
+  webSocket.broadcastTXT(jsonString);
+}
+
+void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {
+  switch (type) {
+    case WStype_TEXT: {
+         String receivedText = "";
+        for (size_t i = 0; i < length; i++) {
+          receivedText += (char)payload[i];
+        }
+
+        // Handle the received text message
+        if (receivedText == "restart") {
+          // Restart ESP32 if the received text is "restart"
+          ESP.restart();
+        } 
+        else if(receivedText == "mppt=1") {
+          setChargingAlgorithm(true);
+        }
+        else if(receivedText == "mppt=0") {
+          setChargingAlgorithm(false);
+        }
+        else if(receivedText == "charge=1"){
+          setOutPutMode(true);
+        }
+        else if(receivedText == "charge=0"){
+          setOutPutMode(false);
+        }
+        else{
+          
+        }
+      break;
+    }
+    case WStype_CONNECTED:
+      // A client has connected, send initial parameter values
+      webSocket.sendTXT(num, "VI:" + String(voltageInput) + "  CI:" + String(currentInput) + "  VO:" + String(voltageOutput) + " PI" + String(powerInput) + " Buck:" + String(buckEnable) + "  Error:" + String(ERR) + " Mppta" + String(MPPT_Mode));
+      // Add more parameters as needed
+      break;
+    case WStype_DISCONNECTED:
+      // A client has disconnected
+      break;
+  }
+}
+
+
+void mDnS(){
+   /*use mdns for host name resolution*/
+        if (!MDNS.begin(hostname)) 
+        { //http://esp32.local
+          Serial.println("Error setting up MDNS responder!");
+          
+            delay(2000);
+          
+        }
+        Serial.println("mDNS responder started");
+        
+        server.on("/login", HTTP_GET, [](AsyncWebServerRequest *request) {
+          request->send(200, "text/html", "Enter your login details:<br><form method='POST' action='/login'><input type='text' name='username' placeholder='Username'><br><input type='password' name='password' placeholder='Password'><br><input type='submit' value='Login'></form>");
+        });
+
+        server.on("/login", HTTP_POST, handleLogin);
+
+        server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+          if (loggedIn) {
+            request->send(200, "text/html", "Logged in. Redirecting to the main page...<script>window.location.replace('/main');</script>");
+          } else {
+            request->redirect("/login");
+          }
+        });
+
+        server.on("/main", HTTP_GET, [](AsyncWebServerRequest *request) {
+          if (loggedIn) {
+            String html = "<html><head><script>var socket = new WebSocket('ws://' + window.location.hostname + ':81/');"
+                        "socket.onmessage = function(event) {document.getElementById('real-time-data').textContent = event.data;};"
+                        "function sendData() {var data = document.getElementById('data-input').value;socket.send(data);}</script></head>"
+                        "<body>Logged in. Welcome to the main page.<br><br>"
+                        "Real-time Data: <div id='real-time-data'></div><br><br>"
+                        "<input type='text' id='data-input' placeholder='Enter real-tidme data'><button onclick='sendData()'>Send Data</button><br><br>"
+                        "Upload Firmware:<br>"
+                        "<form method='POST' action='/update' enctype='multipart/form-data'><input type='file' name='update'><input type='submit' value='Update Firmware'></form></body></html>";
+            request->send(200, "text/html", html);
+          } else {
+            request->redirect("/login");
+          }
+        });
+
+        server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
+          if (loggedIn) {
+            request->send(200, "text/plain", "Firmware update page. Please use a POST request.");
+          } else {
+            request->send(403, "text/plain", "Access denied. Please log in first.");
+          }
+        }, handleFirmwareUpdate);
+
+        server.begin();
+
+        webSocket.begin();
+        webSocket.onEvent(handleWebSocketMessage);
+        updateTimer.attach(1, updateParameters);
+}
+

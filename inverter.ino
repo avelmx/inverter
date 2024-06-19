@@ -2,8 +2,14 @@
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_MCP23X08.h>
 #include <Adafruit_MCP23X17.h>
-#include <ledc.h> // for LED control peripheral
 #include <math.h> // for sin() function
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <ArduinoJson.h> 
+#include <Update.h>
+#include <WebSocketsServer_Generic.h>
+#include <ESPAsyncWebSrv.h>
+#include <Ticker.h>
 
 #define USE_MUTEX
 
@@ -21,11 +27,8 @@
 #define PWM_FREQUENCY 100000  // 100 kHz carrier frequency
 #define SAMPLING_FREQUENCY 1000000  // 1 MHz sampling frequency
 #define ADC_RESOLUTION 10  // Adjust if using a different ADC resolution
-#define DEAD_TIME_CYCLES 10  // Adjust based on IRF3205 datasheet
+#define DEAD_TIME_CYCLES 0.15  // Adjust based on IRF3205 datasheet
 
-// Global LUTs (place holders for actual storage)
-lut_entry_t shared_lut[LUT_SIZE];
-lut_entry_t local_lut[LOCAL_LUT_SIZE]; // Previously implemented local LUT
 
 #define SDA_PIN 41 // GPIO 41
 #define SCL_PIN 40 // GPIO 40
@@ -64,6 +67,13 @@ ssid[] = "avel_home",                   //   USER PARAMETER - Enter Your WiFi SS
 pass[] = "zxcvbnmmmm",               //   USER PARAMETER - Enter Your WiFi Password
 softApssid[] = "esp32";
 
+const char* firmwareFileName = "/firmware.bin";
+const char* hostname = "esp32-ota";
+const char* username = "avel"; // Set your username
+const char* passwordHash = "md5"; // Set your password hash (e.g., using md5)
+
+bool loggedIn = false;
+
 //====================================== USER PARAMETERS ==========================================//
 // The parameters below are the default parameters used when the MPPT charger settings have not    //
 // been set or saved through the LCD menu interface or mobile phone WiFi app. Some parameters here //
@@ -81,6 +91,7 @@ enableBluetooth         = 1,           //   USER PARAMETER - Enable Bluetooth Co
 enableLCD               = 0,           //   USER PARAMETER - Enable LCD display
 enableLCDBacklight      = 0,           //   USER PARAMETER - Enable LCD display's backlight
 overrideFan             = 0,           //   USER PARAMETER - Fan always on
+enableActiveControl     = 0,
 enableDynamicCooling    = 0;           //   USER PARAMETER - Enable for PWM cooling control 
 int
 serialTelemMode         = 1,           //  USER PARAMETER - Selects serial telemetry data feed (0 - Disable Serial, 1 - Display All Data, 2 - Display Essential, 3 - Number only)
@@ -106,6 +117,9 @@ float
 voltageBatteryMax       = 12.5000,     //   USER PARAMETER - Maximum Battery Charging Voltage (Output V)
 voltageBatteryMin       = 10.200,     //   USER PARAMETER - Minimum Battery Charging Voltage (Output V)
 currentCharging         = 12.0000,     //   USER PARAMETER - Maximum Charging Current (A - Output)
+ki                      = 0.0,
+kp                      = 0.1,
+kd                      = 0.0,
 electricalPrice         = 9.5000;      //   USER PARAMETER - Input electrical price per kWh (Dollar/kWh,Euro/kWh,Peso/kWh)
 
 
@@ -142,6 +156,7 @@ vInSystemMin            = 10.000,     //  CALIB PARAMETER -
 acMinRmsVoltage         = 210,
 acMaxRmsVoltage         = 240,
 targetAcRMSVoltage      = 220,
+maxAcrmsCurrent         = 6,
 maxPowerVin             =18.000;      //input voltage at which solar panel power maxes out
 
 //===================================== SYSTEM PARAMETERS =========================================//
@@ -150,6 +165,12 @@ maxPowerVin             =18.000;      //input voltage at which solar panel power
 // you can access these variables to acquire data needed for your mods.                            //
 //=================================================================================================//
 bool
+inverterEnable        = 0,
+trigprotectionTask    = 0,
+ACinitialize          = 1,           
+enable12Vbus          = 1,
+enable24Vbus          = 0,
+enableACload          = 0,
 buckEnable            = 0,           // SYSTEM PARAMETER - Buck Enable Status
 fanStatus             = 0,           // SYSTEM PARAMETER - Fan activity status (1 = On, 0 = Off)
 bypassEnable          = 0,           // SYSTEM PARAMETER - 
@@ -205,6 +226,7 @@ conv1                 = 0,           // SYSTEM PARAMETER -
 conv2                 = 0,           // SYSTEM PARAMETER -
 noacsampledata        = 2500,
 acfrequency           = 50,
+fanPWM                = 0,
 intTemp               = 0;           // SYSTEM PARAMETER -
 float
 VSI                   = 0.0000,      // SYSTEM PARAMETER - Raw input voltage sensor ADC voltage
@@ -248,6 +270,12 @@ floatTemp2             = 0.0000,
 feedbackfrequency     = 0.0000,
 acrmsvoltage          = 0.0000,
 acrmscurrent          = 0.0000,
+prevtrigtemp1         = 0.0000,
+prevtrigtemp2         = 0.0000,
+prevtrigvoltOutput    = 0.0000,
+prevtrigvolt24bus     = 0.0000,
+prevtrigvoltInput     = 0.0000,
+prevTrigbatteryPercent= 0.0000,
 vOutSystemMin         = 0.0000;     //  CALIB PARAMETER - 
 unsigned long 
 currentErrorMillis    = 0,           //SYSTEM PARAMETER -
@@ -267,8 +295,18 @@ prevLCDMillis         = 0,           //SYSTEM PARAMETER -
 prevLCDBackLMillis    = 0,           //SYSTEM PARAMETER -
 timeOn                = 0,           //SYSTEM PARAMETER -
 loopTimeStart         = 0,           //SYSTEM PARAMETER - Used for the loop cycle stop watch, records the loop start time
+initializingTime       = 0,
 loopTimeEnd           = 0,           //SYSTEM PARAMETER - Used for the loop cycle stop watch, records the loop end time
-secondsElapsed        = 0;           //SYSTEM PARAMETER - 
+secondsElapsed        = 0;           //SYSTEM PARAMETER - 0
+
+//TOLERANCE VALUES 
+float
+voltagetolerance      = 0.1,
+currenttolerance      = 0.1,
+temperaturetolereance = 0.1,
+batterytolerance      = 1;
+
+
 
 // Define data struct for ac voltage and current
  typedef struct {
@@ -284,14 +322,9 @@ typedef struct {
     float associated_period_ratio;
 } errorData_t;
 
-errorData_t* errordataArray = new errorData_t[noacsampledata/frequency];
+errorData_t* errordataArray = new errorData_t[noacsampledata/acfrequency];
 
-// Function prototypes for the tasks
-void error_handling_task(void *pvParameters);
-void sensor_acquisition_task(void *pvParameters);
-void buck_task(void *pvParameters);
-void inverter_task(void *pvParameters);
-void ac_feedback_task(void *pvParameters);
+
 
 // Task handle
 TaskHandle_t protection_task_handle;
@@ -300,6 +333,12 @@ TaskHandle_t inverter_task_handle;
 
 // Mutex for shared resources
 SemaphoreHandle_t shared_lut_mutex;
+QueueHandle_t protection_queue; // Declare queue handle globally
+
+Ticker updateTimer;
+
+AsyncWebServer server(80);
+WebSocketsServer webSocket(81);
 
 void setup() {
   Serial.begin(115200); //Our lovely cereal
@@ -326,6 +365,9 @@ void setup() {
     Serial.println("Error nitializing MCP23017.");
     while (1);
   }
+
+  WiFi.begin(ssid, pass);
+  delay(1000);
   //pin modes
   //Inputs
   mcp.pinMode(GPIO34, INPUT);  //ADS1015 at 0x49 RDY
@@ -351,13 +393,38 @@ void setup() {
     shared_lut_mutex = xSemaphoreCreateMutex();
   #endif
   
-  esp_partition_t lut_partition = esp_partition_find(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY);
-  if (lut_partition) {
-    // Read LUT data from flash into global 'shared_lut' variable
-    // ... (implementation details for flash read using partition API)
-  } else {
-    // Handle error: LUT partition not found
+protection_queue = xQueueCreate(1, sizeof(uint8_t)); // Create queue with size 1 and data size
+if (protection_queue == NULL) {
+  // Handle queue creation error
+  Serial.println("Error initializing protection trigger queue. Device might blow up");
+  while (1);
+}
+
+
+if (WiFi.status() == WL_CONNECTED) 
+  { 
+    Serial.println("");
+    Serial.print("Connected to ");
+    Serial.println(ssid);
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP()); 
   }
+  else
+  {
+    Serial.println("Configuring access point...");
+    // You can remove the password parameter if you want the AP to be open.
+    // a valid password must have more than 7 characters
+    if (!WiFi.softAP(softApssid, pass)) {
+        log_e("Soft AP creation failed.");
+        while(1);
+      }
+      IPAddress myIP = WiFi.softAPIP();
+      Serial.print("AP IP address: ");
+      Serial.println(myIP);
+       delay(2000);
+  }
+
+  mDnS();
 
    // Create the tasks
   xTaskCreatePinnedToCore(
@@ -411,6 +478,15 @@ void setup() {
   xTaskCreate(
     ac_feedback_task
     , "ac_feedback_task"
+    , 2048
+    , NULL
+    , 3
+    , NULL
+  );
+
+xTaskCreate(
+    telemetry_task
+    , "telemetry_task"
     , 2048
     , NULL
     , 3

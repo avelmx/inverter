@@ -10,7 +10,7 @@ void buck_task(void *pvParameters) {
   for (;;){
     // print out the value you read:
     Charging_Algorithm();   //TAB#5 - Battery Charging Algorithm
-    vTaskDelay(10); // 100ms delay
+    vTaskDelay(10); // 10ms delay
   }
 
 }

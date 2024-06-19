@@ -1,9 +1,8 @@
 
 void sensor_acquisition_task(void *pvParameters) {
-  
   for (;;){
     Read_Sensors();         //TAB#2 - Sensor data measurement and computation
-    vTaskDelay(100); // 100ms delay
+    vTaskDelay(10); // 100ms delay
   }
 }
 
@@ -63,6 +62,14 @@ void Read_Sensors(){
     sampleStoreTS = 0;
     TS1 = 0;
     TS2 = 0;
+
+    //Protection trigger ISR
+    if((abs(temperature1 - prevtrigtemp1) > temperaturetolereance) || (abs(temperature2 - prevtrigtemp2) > temperaturetolereance)){
+      prevtrigtemp1 = temperature1;
+      prevtrigtemp2 = temperature2;
+      trigprotectionTask = true;
+    }
+
   }
   /////////// VOLTAGE & CURRENT SENSORS /////////////
   VSI = 0.0000;      //Clear Previous Input Voltage 
@@ -81,16 +88,22 @@ void Read_Sensors(){
   }
   voltageInput  = (VSI/avgCountVS)*inVoltageDivRatio; 
   voltageOutput = (VSO/avgCountVS)*outVoltageDivRatio;
-  voltageOutputAc = (ACVSO/avgCountVS)*acOutVoltageDivRatio;
   voltage24bus = (VS24V/avgCountVS)*outVoltageDivRatio;
 
+  //Protection trigger ISR
+    if((abs(prevtrigvoltInput - voltageInput) > voltagetolerance) || (abs(prevtrigvoltOutput - voltageOutput) > voltagetolerance)  || (abs(prevtrigvolt24bus - voltage24bus) > voltagetolerance)){
+      prevtrigvoltInput = voltageInput;
+      prevtrigvoltOutput = voltageOutput;
+      prevtrigvolt24bus = voltage24bus;
+      trigprotectionTask = true;
+    }
   
+
   //CURRENT SENSOR - Instantenous Averaging   
   for(int i = 0; i<avgCountCS; i++){
     CSI = CSI + ads1.computeVolts(ads1.readADC_SingleEnded(2));
     IS12V = IS12V + ads3.computeVolts(ads3.readADC_SingleEnded(0));
     IS24V = IS24V + ads3.computeVolts(ads3.readADC_SingleEnded(1));
-    ACCSO = ACCSO + ads1.computeVolts(ads1.readADC_SingleEnded(1));
   }
   CSI_converted = (CSI/avgCountCS)*1.3300;
   currentInput  = ((CSI_converted-currentMidPoint)*-1)/currentSensV;  
@@ -116,6 +129,13 @@ void Read_Sensors(){
   //STATE OF CHARGE - Battery Percentage
   batteryPercent  = ((voltageOutput-voltageBatteryMin)/(voltageBatteryMax-voltageBatteryMin))*101;
   batteryPercent  = constrain(batteryPercent,0,100);
+  //Protection trigger ISR
+    if(abs(prevTrigbatteryPercent - batteryPercent) > batterytolerance){
+      prevTrigbatteryPercent = batteryPercent;
+      trigprotectionTask = true;
+    }
+ 
+
 
   //TIME DEPENDENT SENSOR DATA COMPUTATION
   currentRoutineMillis = millis();
@@ -132,3 +152,4 @@ void Read_Sensors(){
   secondsElapsed = millis()/1000;                                      //Gets the time in seconds since the was turned on  and active
   energySavings  = electricalPrice*(Wh/1000.0000);                     //Computes the solar energy saving in terms of money (electricity flag rate)   
 }
+

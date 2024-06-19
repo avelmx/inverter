@@ -3,67 +3,96 @@ void ac_feedback_task(void *pvParameters) {
   for (;;){
     counter = 0;
     while(noacsampledata){
-      acsampleData_t[counter].acvoltage = ads2.readADC_SingleEnded(0);
-      acsampleData_t[counter].accurrent = ads1.readADC_SingleEnded(0);
-      acsampleData_t[counter].acsamplingTime =  millis();
-      unsigned long theTime = acsampleData_t[counter].acsamplingTime;
-      errordataArray[counter % acfrequency].ac_voltage_errorCorrection = calculatePerfectSineVoltageValue(theTime, acfrequency) - acsampleData_t[counter].acvoltage;
-      errordataArray[counter % acfrequency].associated_period_ratio = (theTime % (1/acfrequency)) / (1/acfrequency);
-      if((counter/(noacsampledata/10)) == 0){
-        acrmsvoltage = calculate_rms_voltag(acsamepleData, counter);  //get ac rms voltage
+      acdataArray[counter].acvoltage = (ads1.computeVolts(ads2.readADC_SingleEnded(0)) * 112.11);   // based on voltage divider ratio
+      acdataArray[counter].accurrent = ads1.computeVolts(ads1.readADC_SingleEnded(0)) ;
+      acdataArray[counter].acsamplingTime =  millis();
+      unsigned long theTime = acdataArray[counter].acsamplingTime;
+
+      if(xSemaphoreTake(shared_lut_mutex, 0) == pdTRUE){ // should not wait if mutex is not available. The code uses interpolation anyways to calculate error between samples; also helps to fullfill the stated no of sps
+        errordataArray[counter % acfrequency].ac_voltage_errorCorrection = calculatePerfectSineVoltageValue(theTime, acfrequency) - acdataArray[counter].acvoltage;
+        errordataArray[counter % acfrequency].associated_period_ratio = (theTime % (1/acfrequency)) / (1/acfrequency);
+        xSemaphoreGive(shared_lut_mutex);
+      }
+      
+      if((counter/(noacsampledata/10)) == 0){ // after 10ms acquire rms - equivalent to 5 complete cycles
+        if(acrmsvoltage == 0){
+          acrmsvoltage = calculate_rms_voltage(acdataArray, counter);  //get ac rms voltage
+          acrmscurrent = calculate_rms_current(acdataArray, counter);
+        }
+        else {
+          acrmsvoltage = 0.6*acrmsvoltage + 0.4*calculate_rms_voltage(acdataArray, counter); // simple averaging
+          acrmscurrent = 0.6*acrmscurrent + 0.4*calculate_rms_current(acdataArray, counter);
+        }
         if(acrmsvoltage < acMinRmsVoltage ){
-          ACOUV = 1;
+          ACOUV = 1;  // flag the over voltage and trigger protection task
+          trigprotectionTask = true;
         }
         else if(acrmsvoltage > acMaxRmsVoltage){
           ACOOV = 1;
+          trigprotectionTask = true;
+        }
+        if(acrmscurrent > maxAcrmsCurrent){
+          ACOUI = 1;
+          trigprotectionTask = true;
         }
       }
       counter++;
-      vTaskDelay(pdMS_TO_TICKS(1/noacsampledata));
+      if(trigprotectionTask){
+        wakeprotectionTask();
+      }   
+      vTaskDelay(pdMS_TO_TICKS(1/noacsampledata)); //needs to take 2500sps so this delay calculated the delay between each sample. must not exceed 3300sps for ads1015 as per datasheet
     }
-    feedbackfrequency = calculate_frequency(acsamepleData, noacsampledata);
+
+    feedbackfrequency = calculate_frequency(acdataArray, noacsampledata);
+
     if(feedbackfrequency < (acfrequency - 3)){
       ACOUF = 1;
+      trigprotectionTask = true;
     }
     else if(feedbackfrequency > (acfrequency + 3)){
       ACOOF = 1;
+      trigprotectionTask = true;
     }
   }
 }
 
 
 
-float calculate_rms_voltage(struct measurement_data *data, int length) {
+float calculate_rms_voltage(acsampleData_t *data, int length) {
   float squared_sum = 0.0;
   for (int i = 0; i < length; i++) {
-    squared_sum += pow(data[i].voltage, 2);
+    squared_sum += pow(data[i].acvoltage, 2);
   }
   return sqrt(squared_sum / length);
 }
 
-float calculate_frequency(struct measurement_data *data, int length, float sampling_rate) {
-  if (length < 2) {
-    return NAN; // Handle case with insufficient data
+float calculate_rms_current(acsampleData_t *data, int length) {
+  float squared_sum = 0.0;
+  for (int i = 0; i < length; i++) {
+    squared_sum += pow(data[i].accurrent, 2);
   }
+  return sqrt(squared_sum / length);
+}
 
+float calculate_frequency(acsampleData_t *data, float sampling_rate) {
   int num_peaks = 0;
   float total_time_diff = 0.0;
-  float prev_peak_time = data[0].sample_time;
+  float prev_peak_time = data[0].acsamplingTime;
 
-  for (int i = 3; i < length - 4; i++) {
+  for (int i = 3; i < noacsampledata - 4; i++) {
     float peak_voltage = 0.0;
     for (int j = i - 2; j <= i + 2; j++) {
-      peak_voltage = fmax(peak_voltage, data[j].voltage);
+      peak_voltage = fmax(peak_voltage, data[j].acvoltage);
     }
 
-    float left_avg = (data[i - 1].voltage + data[i - 2].voltage + data[i - 3].voltage)/3; //reduce noise
-    float right_avg = (data[i + 1].voltage + data[i + 2].voltage + data[i + 3].voltage)/3; //reduce noise
+    float left_avg = (data[i - 1].acvoltage + data[i - 2].acvoltage + data[i - 3].acvoltage)/3; //reduce noise
+    float right_avg = (data[i + 1].acvoltage + data[i + 2].acvoltage + data[i + 3].acvoltage)/3; //reduce noise
     if (peak_voltage > left_avg && peak_voltage > right_avg) {
       // Only consider positive peaks after rectification
 
-      if (num_peaks % 2 == 1 && prev_peak_time != data[0].sample_time) {
-        total_time_diff += data[i].sample_time - prev_peak_time;
-        prev_peak_time = data[i].sample_time;
+      if (num_peaks % 2 == 1 && prev_peak_time != data[0].acsamplingTime) {
+        total_time_diff += data[i].acsamplingTime - prev_peak_time;
+        prev_peak_time = data[i].acsamplingTime;
       }
       num_peaks++;
     }
@@ -81,7 +110,7 @@ float calculate_frequency(struct measurement_data *data, int length, float sampl
 
 float calculatePerfectSineVoltageValue(unsigned long runningTime, float frequency) {
     // Calculate the period of the sine wave
-    float period = 1.0 / frequency;     
+    unsigned long period = 1.0 / frequency;     
     // Calculate the number of complete cycles in the running time
     float remainingTime = runningTime % period;  
     // If there's no remaining time, return 0 (no duty cycle)
@@ -98,20 +127,9 @@ float calculatePerfectSineVoltageValue(unsigned long runningTime, float frequenc
 }
 
 
-float pid_control(float reference, float measured, float kp, float ki, float kd) {
-  // Calculate error terms
-  static float error_prev = 0.0f;  // Stores previous error for integral term
-  float error = reference - measured;
-  float error_integral = error_prev + error; // Simple summation for integral term
-
-  // Update previous error for next iteration
-  error_prev = error;
-
-  // Calculate PID output
-  float output = kp * error + ki * error_integral + kd * (error - error_prev);
-
-  // Limit output (optional)
-  // ... (implement logic to limit output if necessary)
-
-  return output;
+void wakeprotectionTask(){
+  uint8_t flag = 1; // Set flag value
+      if (xQueueSend(protection_queue, &flag, portMAX_DELAY) != pdTRUE) {
+        Serial.println("Failed to woke protection task. Possibly already woken.");
+      }
 }
