@@ -21,6 +21,7 @@ void inverter_task(void *pvParameters) {
     if(((initializingTime - runningTime) > 10000) && inverterEnable == true && enableACload == true){takeACload(); }
     // Calculate duty cycle using LUT function
     duty_cycle =  calculateDutyCycle(runningTime, acfrequency);
+    duty_cycle = duty_cycle * scaledfactor;
     if(xSemaphoreTake(shared_lut_mutex, 0) == pdTRUE){
       duty_cycle = duty_cycle + returnerror((runningTime % (1/acfrequency)) / (1/acfrequency));
        xSemaphoreGive(shared_lut_mutex);

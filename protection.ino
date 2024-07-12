@@ -5,6 +5,7 @@ void protection_task(void *pvParameters) {
       // Task woken up by message in queue, perform protection checks here
       Device_Protection();
       relayOperation();
+      Serial.println("niko proyection");  
       trigprotectionTask = false;
     }
   }

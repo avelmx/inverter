@@ -6,6 +6,7 @@ void system_task(void *pvParameters) {
   for (;;){
     System_Processes();     //TAB#4 - Routine system processes 
     webSocket.loop();
+    Serial.println("niko sytem");  
   }   
 }
 
@@ -158,12 +159,12 @@ void mDnS(){
    /*use mdns for host name resolution*/
         if (!MDNS.begin(hostname)) 
         { //http://esp32.local
-          Serial.println("Error setting up MDNS responder!");
+          SytemPrint += "System:Error setting up MDNS responder!,";
           
             delay(2000);
           
         }
-        Serial.println("mDNS responder started");
+        SytemPrint += "System:mDNS responder started,";
         
         server.on("/login", HTTP_GET, [](AsyncWebServerRequest *request) {
           request->send(200, "text/html", "Enter your login details:<br><form method='POST' action='/login'><input type='text' name='username' placeholder='Username'><br><input type='password' name='password' placeholder='Password'><br><input type='submit' value='Login'></form>");

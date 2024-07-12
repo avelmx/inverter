@@ -11,6 +11,12 @@
 #include <ESPAsyncWebSrv.h>
 #include <Ticker.h>
 
+#if CONFIG_FREERTOS_UNICORE
+#define ARDUINO_RUNNING_CORE 0
+#else
+#define ARDUINO_RUNNING_CORE 1
+#endif
+
 #define USE_MUTEX
 
 // Define LED channel connected to the inverter circuit
@@ -95,7 +101,7 @@ enableActiveControl     = 0,
 enableDynamicCooling    = 0;           //   USER PARAMETER - Enable for PWM cooling control 
 int
 serialTelemMode         = 1,           //  USER PARAMETER - Selects serial telemetry data feed (0 - Disable Serial, 1 - Display All Data, 2 - Display Essential, 3 - Number only)
-pwmResolution           = 11,          //  USER PARAMETER - PWM Bit Resolution 
+pwmResolution           = 8,          //  USER PARAMETER - PWM Bit Resolution 
 pwmFrequency            = 39000,       //  USER PARAMETER - PWM Switching Frequency - Hz (For Buck)
 fanPwm                  = 0,
 fanpwmFrequency         = 1000,
@@ -120,6 +126,7 @@ currentCharging         = 12.0000,     //   USER PARAMETER - Maximum Charging Cu
 ki                      = 0.0,
 kp                      = 0.1,
 kd                      = 0.0,
+scaledfactor             = 1.0,
 electricalPrice         = 9.5000;      //   USER PARAMETER - Input electrical price per kWh (Dollar/kWh,Euro/kWh,Peso/kWh)
 
 
@@ -306,6 +313,7 @@ currenttolerance      = 0.1,
 temperaturetolereance = 0.1,
 batterytolerance      = 1;
 
+String SytemPrint;
 
 
 // Define data struct for ac voltage and current
@@ -324,6 +332,13 @@ typedef struct {
 
 errorData_t* errordataArray = new errorData_t[noacsampledata/acfrequency];
 
+typedef struct {
+    float ac_voltage;
+    float associated_period_ratio;
+} acPrintData_t;
+
+acPrintData_t* acData = new acPrintData_t[noacsampledata/acfrequency];
+
 
 
 // Task handle
@@ -340,29 +355,33 @@ Ticker updateTimer;
 AsyncWebServer server(80);
 WebSocketsServer webSocket(81);
 
+
+const int baudRat = 115200;  // Adjust baud rate as needed
+const char* encoding = "utf-8";
+
 void setup() {
-  Serial.begin(115200); //Our lovely cereal
+  Serial.begin(baudRat); //Our lovely cereal
   Wire.begin(SDA_PIN, SCL_PIN);
-  
+  Serial.println("niko hapa");
   ADC_SetGain();
   // Initialize ADS1 with the default address 0x48
   if (!ads1.begin()) {
-    Serial.println("Failed to initialize ADS1.");
+    SytemPrint = "System:Failed to initialize ADS1,";
   }
 
   // Initialize ADS2 with address 0x49
   if (!ads2.begin(0x49)) {
-    Serial.println("Failed to initialize ADS2.");
+   SytemPrint += "System:Failed to initialize ADS2,";
   }
 
   // Initialize ADS3 with address 0x4A
   if (!ads3.begin(0x4A)) {
-    Serial.println("Failed to initialize ADS3.");
+    SytemPrint += "System:Failed to initialize ADS3,";
   }
 
   //MCP23017 INITIALIZATION
   if (!mcp.begin_I2C()) {
-    Serial.println("Error nitializing MCP23017.");
+    SytemPrint += "System:Error nitializing MCP23017,";
     while (1);
   }
 
@@ -396,22 +415,19 @@ void setup() {
 protection_queue = xQueueCreate(1, sizeof(uint8_t)); // Create queue with size 1 and data size
 if (protection_queue == NULL) {
   // Handle queue creation error
-  Serial.println("Error initializing protection trigger queue. Device might blow up");
+  SytemPrint += "System:Error initializing protection trigger queue. Device might blow up,";
   while (1);
 }
 
 
 if (WiFi.status() == WL_CONNECTED) 
   { 
-    Serial.println("");
-    Serial.print("Connected to ");
-    Serial.println(ssid);
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP()); 
+    SytemPrint += "System:ssid-" + String(ssid);
+    SytemPrint += "-IP address-";
+    SytemPrint += String(WiFi.localIP()) + ","; 
   }
   else
   {
-    Serial.println("Configuring access point...");
     // You can remove the password parameter if you want the AP to be open.
     // a valid password must have more than 7 characters
     if (!WiFi.softAP(softApssid, pass)) {
@@ -419,8 +435,8 @@ if (WiFi.status() == WL_CONNECTED)
         while(1);
       }
       IPAddress myIP = WiFi.softAPIP();
-      Serial.print("AP IP address: ");
-      Serial.println(myIP);
+      SytemPrint += "System:AP IP address-";
+      SytemPrint += String(myIP) + ",";
        delay(2000);
   }
 
@@ -432,9 +448,9 @@ if (WiFi.status() == WL_CONNECTED)
     , "protection_task"
     , 2048
     , NULL
-    , 6
+    , 7
     , &protection_task_handle
-    , 1 
+    , ARDUINO_RUNNING_CORE 
   );
 
   xTaskCreatePinnedToCore(
@@ -450,20 +466,22 @@ if (WiFi.status() == WL_CONNECTED)
   xTaskCreate(
     buck_task
     , "buck_task"
-    , 2048
+    , 32768
     , NULL
     , 4
     , NULL
   );
-
+/*
   xTaskCreate(
     system_task
     , "system_task"
-    , 2048
+    , 32768
     , NULL
     , 1
     , NULL
   );
+
+
 
   xTaskCreatePinnedToCore(
     inverter_task
@@ -472,32 +490,36 @@ if (WiFi.status() == WL_CONNECTED)
     , NULL
     , 5
     , &inverter_task_handle
-    , 1 
+    , ARDUINO_RUNNING_CORE 
   );
 
+    xTaskCreate(
+    telemetry_task
+    , "telemetry_task"
+    , 655360
+    , NULL
+    , 3
+    , NULL
+  );
+*/
   xTaskCreate(
     ac_feedback_task
     , "ac_feedback_task"
-    , 2048
+    , 8192
     , NULL
     , 3
     , NULL
   );
 
-xTaskCreate(
-    telemetry_task
-    , "telemetry_task"
-    , 2048
-    , NULL
-    , 3
-    , NULL
-  );
+
+
+Serial.println(SytemPrint);
 
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
- 
+    Serial.println("niko hapa");
+vTaskDelay(1000);
 }
 
 

@@ -5,12 +5,14 @@ void buck_task(void *pvParameters) {
   ledcAttachPin(buck_IN, PWM_CHANNEL_C);                        //Set pin as PWM
   ledcWrite(PWM_CHANNEL_C,PWM);                                 //Write PWM value at startup (duty = 0)
   pwmMax = pow(2,pwmResolution)-1;                           //Get PWM Max Bit Ceiling
-  pwmMaxLimited = (PWM_MaxDC*pwmMax)/100.000;                //Get maximum PWM Duty Cycle (pwm limiting protection)
-  
+  pwmMaxLimited = (PWM_MaxDC*pwmMax)/100.000;                //Get maximum PWM Duty Cycle (pwm limiting protection)                          
+  buck_Disable();
+
   for (;;){
     // print out the value you read:
     Charging_Algorithm();   //TAB#5 - Battery Charging Algorithm
-    vTaskDelay(10); // 10ms delay
+    Serial.println("niko buck");  
+    vTaskDelay(5); // 10ms delay
   }
 
 }
@@ -87,10 +89,8 @@ void Charging_Algorithm(){
     if(REC==1){                                                                      //IUV RECOVERY - (Only active for charging mode)
       REC=0;                                                                         //Reset IUV recovery boolean identifier 
       buck_Disable();
-      Serial.println("> Solar Panel Detected");                                      //Display serial message
-      Serial.print("> Computing For Predictive PWM ");                               //Display serial message 
-      for(int i = 0; i<40; i++){Serial.print(".");delay(30);}                        //For loop "loading... effect
-      Serial.println("");                                                            //Display a line break on serial for next lines  
+      SytemPrint += "System:> Solar Panel Detected > Computing For Predictive PWM ,";                                      //Display serial message                             //Display serial message 
+      for(int i = 0; i<40; i++){Serial.print(".");delay(30);}                        //For loop "loading... effect                                                          //Display a line break on serial for next lines  
       predictivePWM();
       PWM = PPWM; 
     }  
@@ -102,12 +102,11 @@ void Charging_Algorithm(){
         else if(voltageOutput<voltageBatteryMax){PWM++;}                             //Increase duty cycle when output is below charging voltage (for CC-CV only mode)
         else{}                                                                       //Do nothing when set output voltage is reached 
         PWM_Modulation();                                                            //Set PWM signal to Buck PWM GPIO       
-        Serial.println("> cc-cv buck psu");
       }     
         /////////////////////// MPPT & CC-CV CHARGING ALGORITHM ///////////////////////  
       else{                                                                                                                                                         
-        if(currentOutput>currentCharging){PWM--; Serial.println(currentCharging);}                                      //Current Is Above → Decrease Duty Cycle
-        else if(voltageOutput>voltageBatteryMax){PWM--; Serial.println(voltageBatteryMax);}                               //Voltage Is Above → Decrease Duty Cycle   
+        if(currentOutput>currentCharging){PWM--;}                                      //Current Is Above → Decrease Duty Cycle
+        else if(voltageOutput>voltageBatteryMax){PWM--;}                               //Voltage Is Above → Decrease Duty Cycle   
         else{                                                                          //MPPT ALGORITHM
           if(voltageInput>maxPowerVin)     {PWM++;}  //  ↑P ↑V ; →MPP  //D--
           else {PWM--; } 

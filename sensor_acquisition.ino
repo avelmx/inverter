@@ -2,6 +2,7 @@
 void sensor_acquisition_task(void *pvParameters) {
   for (;;){
     Read_Sensors();         //TAB#2 - Sensor data measurement and computation
+    Serial.println("niko sensor ac");  
     vTaskDelay(10); // 100ms delay
   }
 }

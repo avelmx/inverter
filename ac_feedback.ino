@@ -13,11 +13,15 @@ void ac_feedback_task(void *pvParameters) {
         errordataArray[counter % acfrequency].associated_period_ratio = (theTime % (1/acfrequency)) / (1/acfrequency);
         xSemaphoreGive(shared_lut_mutex);
       }
+
+      acData[counter % acfrequency].ac_voltage = acdataArray[counter].acvoltage;
+      acData[counter % acfrequency].associated_period_ratio = (theTime % (1/acfrequency)) / (1/acfrequency);
       
       if((counter/(noacsampledata/10)) == 0){ // after 10ms acquire rms - equivalent to 5 complete cycles
         if(acrmsvoltage == 0){
           acrmsvoltage = calculate_rms_voltage(acdataArray, counter);  //get ac rms voltage
           acrmscurrent = calculate_rms_current(acdataArray, counter);
+          adjustscaledfactor(acrmsvoltage);
         }
         else {
           acrmsvoltage = 0.6*acrmsvoltage + 0.4*calculate_rms_voltage(acdataArray, counter); // simple averaging
@@ -39,7 +43,8 @@ void ac_feedback_task(void *pvParameters) {
       counter++;
       if(trigprotectionTask){
         wakeprotectionTask();
-      }   
+      }
+      Serial.println("niko ac feedback");  
       vTaskDelay(pdMS_TO_TICKS(1/noacsampledata)); //needs to take 2500sps so this delay calculated the delay between each sample. must not exceed 3300sps for ads1015 as per datasheet
     }
 
@@ -56,7 +61,17 @@ void ac_feedback_task(void *pvParameters) {
   }
 }
 
-
+void adjustscaledfactor(float acrms)  {
+  if((scaledfactor <= 1) && ((acrms - targetAcRMSVoltage) > 1)){
+    scaledfactor = scaledfactor - 0.05;
+  }
+  else if((scaledfactor <= 1) && ((acrms - targetAcRMSVoltage) < -1)){
+    scaledfactor = scaledfactor + 0.05;
+  }
+  else{
+    scaledfactor = 1;
+  }
+}
 
 float calculate_rms_voltage(acsampleData_t *data, int length) {
   float squared_sum = 0.0;
@@ -130,6 +145,6 @@ float calculatePerfectSineVoltageValue(unsigned long runningTime, float frequenc
 void wakeprotectionTask(){
   uint8_t flag = 1; // Set flag value
       if (xQueueSend(protection_queue, &flag, portMAX_DELAY) != pdTRUE) {
-        Serial.println("Failed to woke protection task. Possibly already woken.");
+        SytemPrint += "System:Failed to woke protection task. Possibly already woken,";
       }
 }
