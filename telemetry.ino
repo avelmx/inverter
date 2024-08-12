@@ -1,12 +1,19 @@
 void telemetry_task(void *pvParameters) {
-  Onboard_Telemetry();    //TAB#6 - Onboard telemetry (USB & Serial Telemetry)
-  Serial.println("niko telemetry");  
-  vTaskDelay(500); // 100ms delay
+ 
+  unsigned int high_water_mark = uxTaskGetStackHighWaterMark(NULL);
+  
+  for (;;){
+    Onboard_Telemetry();    //TAB#6 - Onboard telemetry (USB & Serial Telemetry)
+    //Serial.print("telemetry task Core " + String(xPortGetCoreID()));  
+    //Serial.println(" Task stack high water mark: "+ String(high_water_mark)); 
+    vTaskDelay(1000); // 100ms delay
+  }
 }
 
 void Onboard_Telemetry(){
    /////////////////////// USB SERIAL DATA TELEMETRY ////////////////////////   
-                                                   
+          feedbackloopfreq = counter;
+          counter = 0;                                        
           //Serial.print(" ERR:");   Serial.print(ERR);
           String dataString = "ERR:" + String(ERR) + ",";
           //Serial.print(" FLV:");   Serial.print(FLV);
@@ -41,7 +48,7 @@ void Onboard_Telemetry(){
           dataString += "PI:" + String(powerInput) + ",";
           //Serial.print(" VI:");    Serial.print(voltageInput,1);
           dataString += "BVI:" + String(voltageInput) + ","; 
-          //Serial.print(" VO:");    Serial.print(voltageOutput,1);
+          //Serial.print(" VO:");    Serial.println(voltageOutput,1);
           dataString += "BVO:" + String(voltageOutput) + ","; 
           //Serial.print(" CI:");    Serial.print(currentInput,2); 
           dataString += "BCI:" +String(currentInput) + ",";
@@ -67,10 +74,22 @@ void Onboard_Telemetry(){
           dataString += "ACI:" + String(acrmscurrent) + ",";
          // Serial.print(" ACF:");     Serial.print(feedbackfrequency);
           dataString += "ACF:" + String(feedbackfrequency) + ",";
-          Serial.println(dataString); 
-          Serial.println(SytemPrint);
-          /*for(int i =0; i<= noacsampledata % acfrequency; i++) {
-            Serial.println("acdata:" + String(acData[i].ac_voltage) + "_" + acData[i].associated_period_ratio + ",");
-          }  */
+          //samplees
+          dataString += "FSPS:" + String(feedbackloopfreq) + ",";
 
+         
+          Serial.println(dataString); 
+          if(SytemPrint== "")
+          {
+
+          }
+          else{
+            Serial.println(SytemPrint);
+            SytemPrint = "";
+          }         
+         /*
+          for(int i =0; i<= noacsampledata % acfrequency; i++) {
+            Serial.println("acdata:" + String(acData[i].ac_voltage) + "_" + acData[i].associated_period_ratio + ",");
+          }  
+*/
 }

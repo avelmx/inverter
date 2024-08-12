@@ -1,12 +1,15 @@
 void system_task(void *pvParameters) {
-  ledcSetup(PWM_CHANNEL_D,fanpwmFrequency,fanpwmResolution);          //Set PWM Parameters
-  ledcAttachPin(fanPin, PWM_CHANNEL_D);                        //Set pin as PWM
-  ledcWrite(PWM_CHANNEL_D,fanPWM);   
+  //ledcSetup(PWM_CHANNEL_D,fanpwmFrequency,fanpwmResolution);          //Set PWM Parameters
+  //ledcAttachPin(fanPin, PWM_CHANNEL_D);                        //Set pin as PWM
+  //ledcWrite(PWM_CHANNEL_D,fanPWM); 
+  unsigned int high_water_mark = uxTaskGetStackHighWaterMark(NULL);  
 
   for (;;){
     System_Processes();     //TAB#4 - Routine system processes 
-    webSocket.loop();
-    Serial.println("niko sytem");  
+    vTaskDelay(50);
+    //webSocket.loop();
+    //Serial.print("system task Core " + String(xPortGetCoreID()));  
+    //Serial.println(" Task stack high water mark: "+ String(high_water_mark)); 
   }   
 }
 
@@ -29,7 +32,7 @@ void System_Processes(){
     else{}                                                             //DYNAMIC PWM COOLING MODE (3-PIN FAN - coming soon)
   }
   else{}                                         //Fan Disabled
-  ledcWrite(PWM_CHANNEL_D,fanPWM); 
+ // ledcWrite(PWM_CHANNEL_D,fanPWM); 
   //////////// LOOP TIME STOPWATCH ////////////
   loopTimeStart = micros();                                            //Record Start Time
   loopTime = (loopTimeStart-loopTimeEnd)/1000.000;                     //Compute Loop Cycle Speed (mS)
@@ -47,7 +50,7 @@ void System_Processes(){
   else{}      
 }
 
-
+/*
 void handleLogin(AsyncWebServerRequest *request) {
   if (request->hasParam("username", true) && request->hasParam("password", true)) {
     String usernameParam = request->getParam("username", true)->value();
@@ -156,7 +159,7 @@ void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t *payload, size_t
 
 
 void mDnS(){
-   /*use mdns for host name resolution*/
+   //use mdns for host name resolution
         if (!MDNS.begin(hostname)) 
         { //http://esp32.local
           SytemPrint += "System:Error setting up MDNS responder!,";
@@ -210,4 +213,4 @@ void mDnS(){
         webSocket.onEvent(handleWebSocketMessage);
         updateTimer.attach(1, updateParameters);
 }
-
+*/

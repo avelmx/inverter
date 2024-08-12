@@ -1,90 +1,65 @@
 
 void inverter_task(void *pvParameters) {
   
-  // Initialize variables
-  float sine_value = 0;  // Replace with logic to get sampled sine wave value (ADC reading)
-  int duty_cycle = 0;
-  wakeprotectionTask();
-
-  // Start LED channel
-  ledcSetup(PWM_CHANNEL_A,PWM_FREQUENCY,ADC_RESOLUTION);          //Set PWM Parameters
-  ledcSetup(PWM_CHANNEL_B,PWM_FREQUENCY,ADC_RESOLUTION);          //Set PWM Parameters
-  ledcAttachPin(IN1_PIN, PWM_CHANNEL_A);  
-  ledcAttachPin(IN2_PIN, PWM_CHANNEL_B); 
-
   while (true) {
-    unsigned long runningTime = millis(); // Current running time in milliseconds
+  
     if(enableACload==true && ACinitialize == true){
       initializingTime = millis(); 
       ACinitialize = false;
     }
-    if(((initializingTime - runningTime) > 10000) && inverterEnable == true && enableACload == true){takeACload(); }
+    if(((initializingTime - runningTime) > 10000) && inverterEnable == true && enableACload == true){takeacload = true; }
     // Calculate duty cycle using LUT function
-    duty_cycle =  calculateDutyCycle(runningTime, acfrequency);
-    duty_cycle = duty_cycle * scaledfactor;
-    if(xSemaphoreTake(shared_lut_mutex, 0) == pdTRUE){
-      duty_cycle = duty_cycle + returnerror((runningTime % (1/acfrequency)) / (1/acfrequency));
-       xSemaphoreGive(shared_lut_mutex);
-    }
-    // Apply dead time
-    if (duty_cycle >= 0 && inverterEnable) {
-       ledcWrite( PWM_CHANNEL_A, duty_cycle);
-      vTaskDelay(pdMS_TO_TICKS(DEAD_TIME_CYCLES));
-       ledcWrite( PWM_CHANNEL_B, 0);  // Turn off low-side MOSFET
-    } else if (duty_cycle < 0 && inverterEnable) {
-       ledcWrite( PWM_CHANNEL_B, abs(duty_cycle));  // Use absolute value for low-side
-      vTaskDelay(pdMS_TO_TICKS(DEAD_TIME_CYCLES));
-       ledcWrite( PWM_CHANNEL_A, 0);  // Turn off high-side MOSFET
-    } else {
-      // Handle zero output condition (optional)
-       ledcWrite( PWM_CHANNEL_A, 0);
-       ledcWrite( PWM_CHANNEL_B, 0);
-    }
 
-    // Delay for PWM frequency
-    int delay_ms = 1 / (PWM_FREQUENCY / 1000); // Delay in milliseconds
-    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    vTaskDelay(5);
   }
 }
 
-void inverter_Enable(){                                                                  //Enable MPPT Buck Converter
-  inverterEnable = 1;
-  mcp.digitalWrite(GPIO16,HIGH);
-  mcp.digitalWrite(GPIO17,HIGH);
+void inverter_Enable(){  
+  if(xSemaphoreTake(i2c_bus1, 10) == pdTRUE)
+      {                                                                //Enable MPPT Buck Converter
+        inverterEnable = 1;
+        mcp.digitalWrite(GPIO16,HIGH);
+        mcp.digitalWrite(GPIO17,HIGH);
+        xSemaphoreGive(i2c_bus1);
+      }
+    
 }
 
-void inverter_Disable(){                                                                 //Disable MPPT Buck Converter
-  inverterEnable = 0; 
-  mcp.digitalWrite(GPIO16,LOW);
-  mcp.digitalWrite(GPIO17,LOW);
-  enableACload = 0;
+void inverter_Disable(){  
+  if(xSemaphoreTake(i2c_bus1, 10) == pdTRUE)
+      {                                                            //Disable MPPT Buck Converter
+        inverterEnable = 0; 
+        mcp.digitalWrite(GPIO16,LOW);
+        mcp.digitalWrite(GPIO17,LOW);
+        xSemaphoreGive(i2c_bus1);
+        enableACload = 0;
+      }
 } 
 
-void takeACload(){
-  mcp.digitalWrite(AC_1_LOG,HIGH);
-  mcp.digitalWrite(AC_2_LOG,HIGH);
-}
+
 
 float returnerror(float associatedtime){
-  if(enableActiveControl == 1){
+  if(enableActiveControl == 1)
+  {
     float storederror;
-    for(int i = 0; i<(noacsampledata/acfrequency); i++){
-      if(associatedtime <= errordataArray[0].associated_period_ratio){
+
+      if(associatedtime <= errordataArray[0].associated_period_ratio)
+      {
         float firsterrordiff = errordataArray[1].ac_voltage_errorCorrection - errordataArray[0].ac_voltage_errorCorrection;
-        float timeratio = associatedtime/(errordataArray[1].associated_period_ratio - errordataArray[0].associated_period_ratio);
+        float timeratio = (errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio -associatedtime)/(errordataArray[1].associated_period_ratio - errordataArray[0].associated_period_ratio);
         storederror = errordataArray[0].ac_voltage_errorCorrection - (firsterrordiff * timeratio);
       }
-      else if(associatedtime >= errordataArray[noacsampledata/acfrequency - 1].associated_period_ratio){
-        float lasterrordiff = errordataArray[noacsampledata/acfrequency - 1].ac_voltage_errorCorrection - errordataArray[noacsampledata/acfrequency - 2].ac_voltage_errorCorrection;
-        float timeratio = associatedtime/(errordataArray[noacsampledata/acfrequency - 1].associated_period_ratio - errordataArray[noacsampledata/acfrequency - 2].associated_period_ratio);
-        storederror = errordataArray[noacsampledata/acfrequency - 1].ac_voltage_errorCorrection + (lasterrordiff * timeratio);
+      else if(associatedtime >= errordataArray[noacsampledata - 1].associated_period_ratio){
+        float lasterrordiff = errordataArray[noacsampledata - 1].ac_voltage_errorCorrection - errordataArray[noacsampledata - 2].ac_voltage_errorCorrection;
+        float timeratio = (errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio -associatedtime)/(errordataArray[noacsampledata - 1].associated_period_ratio - errordataArray[noacsampledata - 2].associated_period_ratio);
+        storederror = errordataArray[noacsampledata - 1].ac_voltage_errorCorrection + (lasterrordiff * timeratio);
       }
-      else if(errordataArray[i].associated_period_ratio <= associatedtime && errordataArray[i+1].associated_period_ratio >= associatedtime){
-        float firsterrordiff = errordataArray[i].ac_voltage_errorCorrection - errordataArray[i + 1].ac_voltage_errorCorrection;
-        float timeratio = associatedtime/(errordataArray[i].associated_period_ratio - errordataArray[i + 1].associated_period_ratio);
-        storederror = errordataArray[i].ac_voltage_errorCorrection + (firsterrordiff * timeratio);
+      else if(errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio <= associatedtime && errordataArray[(int)floor(associatedtime * noacsampledata)+1].associated_period_ratio >= associatedtime){
+        float firsterrordiff = errordataArray[(int)floor(associatedtime * noacsampledata)].ac_voltage_errorCorrection - errordataArray[(int)floor(associatedtime * noacsampledata) + 1].ac_voltage_errorCorrection;
+        float timeratio = (errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio -associatedtime)/(errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio - errordataArray[(int)floor(associatedtime * noacsampledata) + 1].associated_period_ratio);
+        storederror = errordataArray[(int)floor(associatedtime * noacsampledata)].ac_voltage_errorCorrection + (firsterrordiff * timeratio);
       }
-    }
+
   
     float pidreturn = pidcontrol(storederror, kp, ki, kd);
     return pidreturn;
@@ -113,7 +88,7 @@ float calculateDutyCycle(unsigned long runningTime, float frequency) {
     float period_ratio = remainingTime / period;
     float sine_value = sin(period_ratio * M_PI * 2);
      // Scale sine_value based on ADC resolution
-    float scaled_value = (float)sine_value * (pow(2, ADC_RESOLUTION) - 1);
+    float scaled_value = sine_value;
     // Offset and scaling for positive/negative voltage control
     int duty_cycle = (int)scaled_value;
     return duty_cycle;
@@ -137,4 +112,24 @@ float pidcontrol(float error, float kp, float ki, float kd) {
   return output;
 }
 
+
+void populateLUT() {
+    for (int i = 0; i < LUT_SIZE; i++) {
+        // Calculate duty cycle value for a sine wave in microseconds
+        dutyCycleLUT[i] = (uint16_t)((sin(2 * PI * i / LUT_SIZE) + 1) * 5000); // Scale to 0-10000 us
+    }
+}
+
+
+void setupTimer() {
+    // Set timer frequency to 1Mhz
+  timer = timerBegin(1000000);
+
+  // Attach onTimer function to our timer.
+  timerAttachInterrupt(timer, &onTimer);
+
+  // Set alarm to call onTimer function every second (value in microseconds).
+  // Repeat the alarm (third parameter) with unlimited count = 0 (fourth parameter).
+  timerAlarm(timer, 100, true, 0);
+}
 

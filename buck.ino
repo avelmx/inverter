@@ -1,18 +1,18 @@
 void buck_task(void *pvParameters) {
-
+  disableSolar();
  //PWM INITIALIZATION
-  ledcSetup(PWM_CHANNEL_C,pwmFrequency,pwmResolution);          //Set PWM Parameters
-  ledcAttachPin(buck_IN, PWM_CHANNEL_C);                        //Set pin as PWM
-  ledcWrite(PWM_CHANNEL_C,PWM);                                 //Write PWM value at startup (duty = 0)
-  pwmMax = pow(2,pwmResolution)-1;                           //Get PWM Max Bit Ceiling
-  pwmMaxLimited = (PWM_MaxDC*pwmMax)/100.000;                //Get maximum PWM Duty Cycle (pwm limiting protection)                          
-  buck_Disable();
+  vTaskDelay(1000); // 10ms delay
+                     
+  enableSolar();
+
+  unsigned int high_water_mark = uxTaskGetStackHighWaterMark(NULL);
 
   for (;;){
     // print out the value you read:
     Charging_Algorithm();   //TAB#5 - Battery Charging Algorithm
-    Serial.println("niko buck");  
-    vTaskDelay(5); // 10ms delay
+    //Serial.print("buck task Core " + String(xPortGetCoreID()));  //for troubleshooting purposes
+    //Serial.println(" Task stack high water mark: "+ String(high_water_mark));
+    vTaskDelay(10); // 10ms delay
   }
 
 }
@@ -20,8 +20,13 @@ void buck_task(void *pvParameters) {
 
 
 
+void enableSolar(){
+  mcp.digitalWrite(SOL_LOG,HIGH); 
+}
 
-
+void disableSolar(){
+  mcp.digitalWrite(SOL_LOG,LOW); 
+}
 
 void resetVariables(){
   secondsElapsed = 0;
@@ -79,7 +84,7 @@ void PWM_Modulation(){
     predictivePWM();                                                                 //Runs and computes for predictive pwm floor
     PWM = constrain(PWM,PPWM,pwmMaxLimited);                                         //CHARGER MODE PWM - limit floor to PPWM and ceiling to maximim allowable duty cycle)                                       
   } 
-  ledcWrite(PWM_CHANNEL_C,PWM);                                                         //Set PWM duty cycle and write to GPIO when buck is enabled
+  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, PWM);                                                      //Set PWM duty cycle and write to GPIO when buck is enabled
   buck_Enable();                                                                     //Turn on MPPT buck (IR2104)
 }
      
@@ -90,7 +95,7 @@ void Charging_Algorithm(){
       REC=0;                                                                         //Reset IUV recovery boolean identifier 
       buck_Disable();
       SytemPrint += "System:> Solar Panel Detected > Computing For Predictive PWM ,";                                      //Display serial message                             //Display serial message 
-      for(int i = 0; i<40; i++){Serial.print(".");delay(30);}                        //For loop "loading... effect                                                          //Display a line break on serial for next lines  
+                            //For loop "loading... effect                                                          //Display a line break on serial for next lines  
       predictivePWM();
       PWM = PPWM; 
     }  
