@@ -95,7 +95,8 @@ def update_data():
                     volt, period = pair.split('_')
                     pl_data = float(volt)
                     timestamps = float(period) 
-                elif key.lower() == 'System':
+                elif str(key) == "System":
+                    print(key.lower())
                     received_sentence = value.lower()
                     text_buffer.append(received_sentence)  # Add new sentence to the buffer
                     if len(text_buffer) > 10:  # Remove oldest sentence if buffer is full
@@ -218,7 +219,7 @@ text_frame = tk.Frame(window, **{"bd": 2, "relief": "groove"})
 text_frame.pack(padx=10, pady=10)
 
 # Text widget for displaying messages
-text_widget = tk.Text(text_frame, height=15, width=50)
+text_widget = tk.Text(text_frame, height=20, width=50)
 text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 # Scrollbar for the text widget

@@ -10,7 +10,7 @@ void inverter_task(void *pvParameters) {
     if(((initializingTime - runningTime) > 10000) && inverterEnable == true && enableACload == true){takeacload = true; }
     // Calculate duty cycle using LUT function
 
-    vTaskDelay(5);
+    vTaskDelay(50);
   }
 }
 
@@ -37,64 +37,6 @@ void inverter_Disable(){
 } 
 
 
-
-float returnerror(float associatedtime){
-  if(enableActiveControl == 1)
-  {
-    float storederror;
-
-      if(associatedtime <= errordataArray[0].associated_period_ratio)
-      {
-        float firsterrordiff = errordataArray[1].ac_voltage_errorCorrection - errordataArray[0].ac_voltage_errorCorrection;
-        float timeratio = (errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio -associatedtime)/(errordataArray[1].associated_period_ratio - errordataArray[0].associated_period_ratio);
-        storederror = errordataArray[0].ac_voltage_errorCorrection - (firsterrordiff * timeratio);
-      }
-      else if(associatedtime >= errordataArray[noacsampledata - 1].associated_period_ratio){
-        float lasterrordiff = errordataArray[noacsampledata - 1].ac_voltage_errorCorrection - errordataArray[noacsampledata - 2].ac_voltage_errorCorrection;
-        float timeratio = (errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio -associatedtime)/(errordataArray[noacsampledata - 1].associated_period_ratio - errordataArray[noacsampledata - 2].associated_period_ratio);
-        storederror = errordataArray[noacsampledata - 1].ac_voltage_errorCorrection + (lasterrordiff * timeratio);
-      }
-      else if(errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio <= associatedtime && errordataArray[(int)floor(associatedtime * noacsampledata)+1].associated_period_ratio >= associatedtime){
-        float firsterrordiff = errordataArray[(int)floor(associatedtime * noacsampledata)].ac_voltage_errorCorrection - errordataArray[(int)floor(associatedtime * noacsampledata) + 1].ac_voltage_errorCorrection;
-        float timeratio = (errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio -associatedtime)/(errordataArray[(int)floor(associatedtime * noacsampledata)].associated_period_ratio - errordataArray[(int)floor(associatedtime * noacsampledata) + 1].associated_period_ratio);
-        storederror = errordataArray[(int)floor(associatedtime * noacsampledata)].ac_voltage_errorCorrection + (firsterrordiff * timeratio);
-      }
-
-  
-    float pidreturn = pidcontrol(storederror, kp, ki, kd);
-    return pidreturn;
-  } else{
-    return 0;
-  }
-}
-
-
-// Function to calculate duty cycle
-float calculateDutyCycle(unsigned long runningTime, float frequency) {
-    // Calculate the period of the sine wave
-    unsigned long period = 1.0 / frequency;   
-    // Calculate the time for one half of the sine wave (from 0 to peak)
-    float halfPeriod = period / 2.0;   
-    // Calculate the number of complete cycles in the running time
-    int completeCycles = runningTime / period;   
-    // Calculate the remaining time after complete cycles
-    float remainingTime = runningTime % period;  
-    // If there's no remaining time, return 0 (no duty cycle)
-    if (remainingTime == 0) {
-        return 0.0;
-    }
-
-    // Calculate the duty cycle as a percentage
-    float period_ratio = remainingTime / period;
-    float sine_value = sin(period_ratio * M_PI * 2);
-     // Scale sine_value based on ADC resolution
-    float scaled_value = sine_value;
-    // Offset and scaling for positive/negative voltage control
-    int duty_cycle = (int)scaled_value;
-    return duty_cycle;
-}
-
-
 float pidcontrol(float error, float kp, float ki, float kd) {
   // Calculate error terms
   static float error_prev = 0.0f;  // Stores previous error for integral term
@@ -114,10 +56,21 @@ float pidcontrol(float error, float kp, float ki, float kd) {
 
 
 void populateLUT() {
-    for (int i = 0; i < LUT_SIZE; i++) {
-        // Calculate duty cycle value for a sine wave in microseconds
-        dutyCycleLUT[i] = (uint16_t)((sin(2 * PI * i / LUT_SIZE) + 1) * 5000); // Scale to 0-10000 us
-    }
+
+  for (int i = 0; i < LUT_SIZE; i++) {
+    pos_dutyCycleLUT[i] = 0; 
+    neg_dutyCycleLUT[i] = 0; 
+    pos_dutyCycleLUT_untouched[i] = 0; 
+    neg_dutyCycleLUT_untouched[i] = 0; 
+  }
+
+  for (int i = 0; i < (LUT_SIZE/2); i++) {
+    // Calculate duty cycle value for a sine wave in microseconds
+    pos_dutyCycleLUT[i] = (uint16_t)((sin((PI * i )/ ((LUT_SIZE/2) -1))) * 98); // Scale to 0-10000 us
+    pos_dutyCycleLUT_untouched[i] = pos_dutyCycleLUT[i];
+    neg_dutyCycleLUT[(LUT_SIZE/2) + i] = (uint16_t)((sin((PI * i )/ ((LUT_SIZE/2) -1))) * 98); // Scale to 0-10000 us
+    neg_dutyCycleLUT_untouched[(LUT_SIZE/2) + i] = neg_dutyCycleLUT[(LUT_SIZE/2) + i];
+  }
 }
 
 
@@ -130,6 +83,6 @@ void setupTimer() {
 
   // Set alarm to call onTimer function every second (value in microseconds).
   // Repeat the alarm (third parameter) with unlimited count = 0 (fourth parameter).
-  timerAlarm(timer, 100, true, 0);
+  timerAlarm(timer, 1000000/(LUT_SIZE * acfrequency), true, 0);
 }
 

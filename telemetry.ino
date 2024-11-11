@@ -55,6 +55,12 @@ void Onboard_Telemetry(){
          // Serial.print(" CO:");    Serial.print(currentOutput,2); 
           dataString += "CO:" + String(currentOutput) + ",";
          // Serial.print(" Wh:");    Serial.print(Wh,2); 
+         dataString += "PPWM:" + String(PPWM) + ",";
+         // Serial.print(" Wh:");    Serial.print(Wh,2);
+         dataString += "fnPWM:" + String(fanPWM) + ",";
+         // Serial.print(" Wh:");    Serial.print(Wh,2); 
+         dataString += "PWM:" + String(buckPwm) + ",";
+         // Serial.print(" Wh:");    Serial.print(Wh,2); 
           dataString += "Wh:" + String(Wh) + ",";
          // Serial.print(" Temp1:");  Serial.print(temperature1);
           dataString += "Temp1:" + String(temperature1) + ",";
@@ -79,13 +85,13 @@ void Onboard_Telemetry(){
 
          
           Serial.println(dataString); 
-          if(SytemPrint== "")
+          if(SytemPrint== "System:")
           {
 
           }
           else{
             Serial.println(SytemPrint);
-            SytemPrint = "";
+            SytemPrint = "System:";
           }         
          /*
           for(int i =0; i<= noacsampledata % acfrequency; i++) {

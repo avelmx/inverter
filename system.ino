@@ -1,13 +1,9 @@
 void system_task(void *pvParameters) {
-  //ledcSetup(PWM_CHANNEL_D,fanpwmFrequency,fanpwmResolution);          //Set PWM Parameters
-  //ledcAttachPin(fanPin, PWM_CHANNEL_D);                        //Set pin as PWM
-  //ledcWrite(PWM_CHANNEL_D,fanPWM); 
   unsigned int high_water_mark = uxTaskGetStackHighWaterMark(NULL);  
 
   for (;;){
     System_Processes();     //TAB#4 - Routine system processes 
-    vTaskDelay(50);
-    //webSocket.loop();
+    vTaskDelay(500);
     //Serial.print("system task Core " + String(xPortGetCoreID()));  
     //Serial.println(" Task stack high water mark: "+ String(high_water_mark)); 
   }   
@@ -19,7 +15,7 @@ void System_Processes(){
   if(enableFan==true){
     if(enableDynamicCooling==false){                                   //STATIC PWM COOLING MODE (2-PIN FAN - no need for hysteresis, temp data only refreshes after 'avgCountTS' or every 500 loop cycles)                       
       if(overrideFan==true){fanStatus=true;}                           //Force on fan
-      else if((temperature1>=temperatureFan || temperature2>=temperatureFan) && fanPWM < 256)
+      else if((temperature1>=temperatureFan || temperature2>=temperatureFan) && fanPWM < 97)
       {
         fanPWM++;
       }               //Turn on fan when set fan temp reached
@@ -32,7 +28,7 @@ void System_Processes(){
     else{}                                                             //DYNAMIC PWM COOLING MODE (3-PIN FAN - coming soon)
   }
   else{}                                         //Fan Disabled
- // ledcWrite(PWM_CHANNEL_D,fanPWM); 
+  mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, fanPWM);
   //////////// LOOP TIME STOPWATCH ////////////
   loopTimeStart = micros();                                            //Record Start Time
   loopTime = (loopTimeStart-loopTimeEnd)/1000.000;                     //Compute Loop Cycle Speed (mS)

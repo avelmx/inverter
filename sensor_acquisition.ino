@@ -9,7 +9,7 @@ void sensor_acquisition_task(void *pvParameters) {
     relayOperation();
     //Serial.print("sensor task Core " + String(xPortGetCoreID()));
     //Serial.println(" Task stack high water mark: " + String(high_water_mark));
-    vTaskDelay(5);  // 100ms delay
+    vTaskDelay(20);  // 100ms delay
                     // 100ms delay
   }
 }
@@ -75,7 +75,7 @@ void Read_Sensors() {
   //Serial.println("acquiring temp readings");
 
   if (sampleStoreTS <= avgCountTS) {
-    if (xSemaphoreTake(i2c_bus1, 3) == pdTRUE) {  //TEMPERATURE SENSOR - Lite Averaging
+    if (xSemaphoreTake(i2c_bus1, 7) == pdTRUE) {  //TEMPERATURE SENSOR - Lite Averaging
       TS1 = TS1 + ads2.readADC_SingleEnded(1);
       TS2 = TS2 + ads2.readADC_SingleEnded(2);
       xSemaphoreGive(i2c_bus1);
@@ -89,17 +89,12 @@ void Read_Sensors() {
     Rntc1 = 1000 * ((TS1 * 9.1) / (3.3 - 0.001 * TS1));
     Rntc2 = 1000 * ((TS2 * 9.1) / (3.3 - 0.001 * TS2));
     temperature1 = (1 / ((1 / 298.15) + ((2.303 / 4000) * (log(Rntc1 / 100000))))) - 273.15;
-    temperature2 = (1 / ((1 / 298.15) + ((2.303 / 4000) * (log(Rntc2 / 100000))))) - 273.15;
+    temperature2 = -((1 / ((1 / 298.15) + ((2.303 / 4000) * (log(Rntc2 / 100000))))) - 273.15);
+
     sampleStoreTS = 0;
     TS1 = 0;
     TS2 = 0;
 
-    //Protection trigger ISR
-    if ((abs(temperature1 - prevtrigtemp1) > temperaturetolereance) || (abs(temperature2 - prevtrigtemp2) > temperaturetolereance)) {
-      prevtrigtemp1 = temperature1;
-      prevtrigtemp2 = temperature2;
-      trigprotectionTask = true;
-    }
   }
   /////////// VOLTAGE & CURRENT SENSORS /////////////
   VSI = 0.0000;  //Clear Previous Input Voltage
@@ -123,20 +118,11 @@ void Read_Sensors() {
       SytemPrint += "couldnt aquire bus no VSI,VSO,V24 readings";
     }
   }
+ex = (VSI / avgCountVS);
+  voltageInput = -0.5934*pow(ex,3) + 1.946*pow(ex,2) + 20.667*ex + 1.0766;
 
-  voltageInput = (VSI / avgCountVS) * inVoltageDivRatio;
-
-  voltageOutput = (VSO / avgCountVS) * outVoltageDivRatio;
+  voltageOutput = (VSO / avgCountVS) * outVoltageDivRatio + 1;
   voltage24bus = (VS24V / avgCountVS) * outVoltageDivRatio;
-
-  //Protection trigger ISR
-  if ((abs(prevtrigvoltInput - voltageInput) > voltagetolerance) || (abs(prevtrigvoltOutput - voltageOutput) > voltagetolerance) || (abs(prevtrigvolt24bus - voltage24bus) > voltagetolerance)) {
-    prevtrigvoltInput = voltageInput;
-    prevtrigvoltOutput = voltageOutput;
-    prevtrigvolt24bus = voltage24bus;
-    trigprotectionTask = true;
-  }
-
 
   //CURRENT SENSOR - Instantenous Averaging
   //Serial.println("acquiring current readings");
@@ -179,13 +165,6 @@ void Read_Sensors() {
   //STATE OF CHARGE - Battery Percentage
   batteryPercent = ((voltageOutput - voltageBatteryMin) / (voltageBatteryMax - voltageBatteryMin)) * 101;
   batteryPercent = constrain(batteryPercent, 0, 100);
-  //Protection trigger ISR
-  if (abs(prevTrigbatteryPercent - batteryPercent) > batterytolerance) {
-    prevTrigbatteryPercent = batteryPercent;
-    trigprotectionTask = true;
-  }
-
-
 
   //TIME DEPENDENT SENSOR DATA COMPUTATION
   currentRoutineMillis = millis();

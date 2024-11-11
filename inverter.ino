@@ -14,24 +14,24 @@
 #define USE_MUTEX
 
 #define DEAD_TIME_CYCLES 1000  // Adjust based on IRF3205 datasheet (1000 x 100ns)
-#define LUT_SIZE 256
+#define LUT_SIZE 512
 
 #define SDA_PIN 41  // GPIO 41
 #define SCL_PIN 40  // GPIO 40
 
 //mcp23017 io pins
-#define GPIO16 7          //inverter ir2104- 2ho, 2lo
-#define GPIO17 8          //inverter ir2104- 1ho, 1lo
+#define GPIO16 8          //inverter ir2104- 2ho, 2lo
+#define GPIO17 9          //inverter ir2104- 1ho, 1lo
 #define GPIO27 13         //buck flow back control
 #define GPIO32 14         //buck ir2104
-#define LOGSEL12_24_1 9   //12 or 24v battery
+#define LOGSEL12_24_1 12   //12 or 24v battery
 #define LOGSEL12_24_2 11  //12 or 24v battery
 #define LOGSEL12_24_3 10  //12 or 24v battery
 #define GPIO34 0          //ADS1015 at 0x49 RDY
 #define GPIO36 1          //ADS1015 at 0x48 RDY
-#define GPIO37 3          //ADS1015 at 0x4A RDY
-#define AC_2_LOG 4        //AC LIVE
-#define AC_1_LOG 12       //AC RETURN
+#define GPIO37 2          //ADS1015 at 0x4A RDY
+#define AC_2_LOG 3        //AC LIVE
+#define AC_1_LOG 4       //AC RETURN
 #define SOL_LOG 5         //Solar panel enable
 #define BAT_LOG 6         //Battery to inverter circuit
 #define IN1_PIN 10        // Replace with actual pin assignment (IO10)
@@ -55,9 +55,9 @@ Adafruit_MCP23X17 mcp;
 // would allow you to override or unlock features for advanced users (settings not on the LCD menu)//
 //=================================================================================================//
 bool
-  MPPT_Mode = 1,             //   USER PARAMETER - Enable MPPT algorithm, when disabled charger uses CC-CV algorithm
-  enableINVERTER = 0,        //   USER PARAMETER - Enable INVERTER
-  output_Mode = 1,           //   USER PARAMETER - 0 = PSU MODE, 1 = Charger Mode
+  MPPT_Mode = 0,             //   USER PARAMETER - Enable MPPT algorithm, when disabled charger uses CC-CV algorithm
+  enableINVERTER = 1,        //   USER PARAMETER - Enable INVERTER
+  output_Mode = 0,           //   USER PARAMETER - 0 = PSU MODE, 1 = Charger Mode
   disableFlashAutoLoad = 1,  //   USER PARAMETER - Forces the MPPT to not use flash saved settings, enabling this "1" defaults to programmed firmware settings.
   enablePPWM = 1,            //   USER PARAMETER - Enables Predictive PWM, this accelerates regulation speed (only applicable for battery charging application)
   enableWiFi = 1,            //   USER PARAMETER - Enable WiFi Connection
@@ -98,6 +98,7 @@ float
   kp = 0.1,
   kd = 0.0,
   scaledfactor = 1.0,
+  buckPwm = 0,
   electricalPrice = 9.5000;  //   USER PARAMETER - Input electrical price per kWh (Dollar/kWh,Euro/kWh,Peso/kWh)
 
 
@@ -112,9 +113,9 @@ int
   ADC_GainSelect = 0,  //  CALIB PARAMETER - ADC Gain Selection (0→±6.144V 3mV/bit, 1→±4.096V 2mV/bit, 2→±2.048V 1mV/bit)
   avgCountVS = 3,      //  CALIB PARAMETER - Voltage Sensor Average Sampling Count (Recommended: 3)
   avgCountCS = 4,      //  CALIB PARAMETER - Current Sensor Average Sampling Count (Recommended: 4)
-  avgCountTS = 500;    //  CALIB PARAMETER - Temperature Sensor Average Sampling Count
+  avgCountTS = 10;    //  CALIB PARAMETER - Temperature Sensor Average Sampling Count
 float
-  inVoltageDivRatio = 8.308,   //  CALIB PARAMETER - Input voltage divider sensor ratio (change this value to calibrate voltage sensor)
+  inVoltageDivRatio = 1,   //  CALIB PARAMETER - Input voltage divider sensor ratio (change this value to calibrate voltage sensor)
   outVoltageDivRatio = 8.308,  //  CALIB PARAMETER - Output voltage divider sensor ratio (change this value to calibrate voltage sensor)
   acOutVoltageDivRatio = 1.000,
   vOutSystemMax = 30.0000,        //  CALIB PARAMETER -
@@ -135,6 +136,7 @@ float
   acMaxRmsVoltage = 240,
   targetAcRMSVoltage = 220,
   maxAcrmsCurrent = 6,
+  ex = 1,
   maxPowerVin = 18.000;  //input voltage at which solar panel power maxes out
 
 //===================================== SYSTEM PARAMETERS =========================================//
@@ -202,7 +204,7 @@ int
   ERR = 0,             // SYSTEM PARAMETER -
   conv1 = 0,           // SYSTEM PARAMETER -
   conv2 = 0,           // SYSTEM PARAMETER -
-  noacsampledata = 10,
+  noacsampledata = 256,
   acfrequency = 50,
   fanPWM = 0,
   intTemp = 0;  // SYSTEM PARAMETER -
@@ -279,18 +281,12 @@ unsigned long
   loopTimeEnd = 0,     //SYSTEM PARAMETER - Used for the loop cycle stop watch, records the loop end time
   secondsElapsed = 0;  //SYSTEM PARAMETER - 0
 
-
-//TOLERANCE VALUES
-float
-  voltagetolerance = 0.1,
-  currenttolerance = 0.1,
-  temperaturetolereance = 0.1,
-  sine_value = 0,
-  batterytolerance = 1;
-
 String SytemPrint;
 
-uint16_t dutyCycleLUT[LUT_SIZE];
+uint16_t pos_dutyCycleLUT[LUT_SIZE];
+uint16_t pos_dutyCycleLUT_untouched[LUT_SIZE];
+uint16_t neg_dutyCycleLUT[LUT_SIZE];
+uint16_t neg_dutyCycleLUT_untouched[LUT_SIZE];
 volatile uint16_t lutIndex = 0;
 
 
@@ -301,14 +297,7 @@ typedef struct {
   float timeInPeriod;
 } acsampleData_t;
 
-acsampleData_t* acdataArray = new acsampleData_t[noacsampledata];
-
-typedef struct {
-  float ac_voltage_errorCorrection;
-  float associated_period_ratio;
-} errorData_t;
-
-errorData_t* errordataArray = new errorData_t[noacsampledata];
+acsampleData_t* acdataArray = new acsampleData_t[LUT_SIZE/2];
 
 
 // Task handle
@@ -321,22 +310,20 @@ SemaphoreHandle_t shared_lut_mutex;
 SemaphoreHandle_t i2c_bus1;
 QueueHandle_t protection_queue;  // Declare queue handle globally
 
-static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;  // Initialize spinlock as unlocked
-volatile SemaphoreHandle_t timerSemaphore;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
-
 const int baudRat = 115200;  // Adjust baud rate as needed
-const char* encoding = "utf-8";
 
 hw_timer_t* timer = NULL;
 
-volatile bool interrupt_flag = false;
-
 void IRAM_ATTR onTimer() {
-  // Serial.println("i have been triggered");
-  uint16_t duty_us = dutyCycleLUT[lutIndex];
-  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, duty_us);
-  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, 10000 - duty_us);  // Complementary duty cycle
+  if (xSemaphoreTake(shared_lut_mutex, 0) == pdTRUE) {
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, pos_dutyCycleLUT[lutIndex]);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, neg_dutyCycleLUT[lutIndex]);  // Complementary duty cycle
+    xSemaphoreGive(shared_lut_mutex);
+  }
+  else{
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, pos_dutyCycleLUT_untouched[lutIndex]);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, neg_dutyCycleLUT_untouched[lutIndex]);  // Complementary duty cycle
+  }
 
   lutIndex = (lutIndex + 1) % LUT_SIZE;
 }
@@ -346,26 +333,25 @@ void setup() {
   Wire.begin(SDA_PIN, SCL_PIN);
 
   ADC_SetGain();
-
+  SytemPrint = "System:";
   // Initialize ADS1 with the default address 0x48
   if (!ads1.begin()) {
-    SytemPrint = "System:Failed to initialize ADS1,";
+    SytemPrint += "Failed to initialize ADS1,";
   }
 
   // Initialize ADS2 with address 0x49
   if (!ads2.begin(0x49)) {
-    SytemPrint += "System:Failed to initialize ADS2,";
+    SytemPrint += "Failed to initialize ADS2,";
   }
 
   // Initialize ADS3 with address 0x4A
   if (!ads3.begin(0x4A)) {
-    SytemPrint += "System:Failed to initialize ADS3,";
+    SytemPrint += "Failed to initialize ADS3,";
   }
 
-  //  ads1.setDataRate(ADS1015_REG_CONFIG_DR_3300SPS);
   //MCP23017 INITIALIZATION
   if (!mcp.begin_I2C()) {
-    SytemPrint += "System:Error nitializing MCP23017,";
+    SytemPrint += "Error nitializing MCP23017,";
   }
 
 
@@ -405,7 +391,7 @@ void setup() {
   protection_queue = xQueueCreate(1, sizeof(uint8_t));  // Create queue with size 1 and data size
   if (protection_queue == NULL) {
     // Handle queue creation error
-    SytemPrint += "System:Error initializing protection trigger queue. Device might blow up,";
+    SytemPrint += "Error initializing protection trigger queue. Device might blow up,";
     while (1)
       ;
   }
@@ -422,6 +408,7 @@ void setup() {
   mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, IN2_PIN);
   // Initialize MCPWM unit 1
   mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM0A, buck_IN);
+  mcpwm_gpio_init(MCPWM_UNIT_1, MCPWM0B, fanPin);
 
   // Initialize MCPWM configuration for inv
   mcpwm_config_t pwm_config;
@@ -433,15 +420,16 @@ void setup() {
 
   //buck initialize
   mcpwm_config_t pwm_buck_config;
-  pwm_buck_config.frequency = 250000;  // Frequency = 100kHz
-  pwm_buck_config.cmpr_a = 50.0;       // Duty cycle of PWMxA = 50%
+  pwm_buck_config.frequency = 50000;  // Frequency = 25kHz
+  pwm_buck_config.cmpr_a = 70;       // Duty cycle of PWMxA = 50%
+  pwm_buck_config. cmpr_b = 96;       // Duty cycle of PWMxB = 50%
   pwm_buck_config.counter_mode = MCPWM_UP_COUNTER;
   pwm_buck_config.duty_mode = MCPWM_DUTY_MODE_0;
 
 
   // Apply configuration to MCPWM unit 0, timer 0
   mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config);
-  mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &pwm_buck_config);
+  mcpwm_init(MCPWM_UNIT_1, MCPWM_TIMER_0, &pwm_buck_config);
 
   // Set dead time to prevent shoot-through
   mcpwm_deadtime_enable(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_ACTIVE_HIGH_COMPLIMENT_MODE, DEAD_TIME_CYCLES, DEAD_TIME_CYCLES);
@@ -474,5 +462,5 @@ void setup() {
 void loop() {
   ac_feedback();
   //Serial.println("feedback");
-  vTaskDelay(5);
+  vTaskDelay((random(1,100))/100);
 }

@@ -11,6 +11,7 @@ void ac_feedback() {
     voltagesample = 0,
     currentsample = 0,
     product = 0,
+    verror = 0,
     timeInPeriod = 0;
 
 
@@ -20,8 +21,8 @@ void ac_feedback() {
     theTime = millis();
     xSemaphoreGive(i2c_bus1);
 
-    timeInPeriod = (remainingTime(theTime, acfrequency)) / (1 / acfrequency);
-    product = timeInPeriod * noacsampledata;
+    timeInPeriod = (remainingTime(theTime,2*acfrequency)) / (1 / (2*acfrequency));
+    product = timeInPeriod * (LUT_SIZE/2);
     sampleindex = floor(product);
 
     if (product - sampleindex >= 0.5) {  // i am too lazy to do interpolation
@@ -30,21 +31,29 @@ void ac_feedback() {
 
     acdataArray[sampleindex].acvoltage = voltagesample;
     acdataArray[sampleindex].accurrent = currentsample;
+    if(enableActiveControl == true){
+      verror = calculatePerfectSineVoltageValue(theTime, acfrequency) - acdataArray[sampleindex].acvoltage;
+      verror = pidcontrol(verror, kp, ki, kd);
+    }
+    else{
+      verror = 0;
+    }
+    
 
     if (xSemaphoreTake(shared_lut_mutex, 0) == pdTRUE) {  // should not wait if mutex is not available. The code uses interpolation anyways to calculate error between samples; also helps to fullfill the stated no of sps
-      errordataArray[sampleindex].ac_voltage_errorCorrection = calculatePerfectSineVoltageValue(theTime, acfrequency) - acdataArray[counter].acvoltage;
-      errordataArray[sampleindex].associated_period_ratio = (remainingTime(theTime, acfrequency)) / (1.0 / acfrequency);
+      pos_dutyCycleLUT[sampleindex] = pos_dutyCycleLUT[lutIndex] + verror;
+      neg_dutyCycleLUT[sampleindex + (LUT_SIZE/2)] = neg_dutyCycleLUT[sampleindex + (LUT_SIZE/2)]  + verror;
       xSemaphoreGive(shared_lut_mutex);
     }
 
-    if ((counter / noacsampledata >= 1) && (counter % noacsampledata == 0)) {  
+    if ((counter == 25)) {  
       if (acrmsvoltage == 0) {
-        acrmsvoltage = calculate_rms_voltage(acdataArray, noacsampledata);  //get ac rms voltage
-        acrmscurrent = calculate_rms_current(acdataArray, noacsampledata);
+        acrmsvoltage = calculate_rms_voltage(acdataArray);  //get ac rms voltage
+        acrmscurrent = calculate_rms_current(acdataArray);
         adjustscaledfactor(acrmsvoltage);
       } else {
-        acrmsvoltage = 0.6 * acrmsvoltage + 0.4 * calculate_rms_voltage(acdataArray, noacsampledata);  // simple averaging
-        acrmscurrent = 0.6 * acrmscurrent + 0.4 * calculate_rms_current(acdataArray, noacsampledata);
+        acrmsvoltage = 0.6 * acrmsvoltage + 0.4 * calculate_rms_voltage(acdataArray);  // simple averaging
+        acrmscurrent = 0.6 * acrmscurrent + 0.4 * calculate_rms_current(acdataArray);
       }
 
       feedbackfrequency = calculate_frequency(acdataArray, noacsampledata);
@@ -93,20 +102,20 @@ void adjustscaledfactor(float acrms)  {
   }
 }
 
-float calculate_rms_voltage(acsampleData_t *data, int length) {
+float calculate_rms_voltage(acsampleData_t *data) {
   float squared_sum = 0.0;
-  for (int i = 0; i < length; i++) {
+  for (int i = 0; i < LUT_SIZE/2; i++) {
     squared_sum += pow(data[i].acvoltage, 2);
   }
-  return sqrt(squared_sum / length);
+  return sqrt(squared_sum /LUT_SIZE/2);
 }
 
-float calculate_rms_current(acsampleData_t *data, int length) {
+float calculate_rms_current(acsampleData_t *data) {
   float squared_sum = 0.0;
-  for (int i = 0; i < length; i++) {
+  for (int i = 0; i < LUT_SIZE/2; i++) {
     squared_sum += pow(data[i].accurrent, 2);
   }
-  return sqrt(squared_sum / length);
+  return sqrt(squared_sum /LUT_SIZE/2);
 }
 
 float calculate_frequency(acsampleData_t *data, float sampling_rate) {
@@ -156,7 +165,7 @@ float calculatePerfectSineVoltageValue(unsigned long runningTime, int frequency)
 
     // Calculate the duty cycle as a percentage
     double period_ratio = remainingTime / period;
-    float sine_value = sin(period_ratio * M_PI * 2);
+    float sine_value = abs(sin(period_ratio * M_PI * 2));
      // Scale sine_value based on ADC resolution
     float scaled_voltage = (float)sine_value * targetAcRMSVoltage * 1.414;
     return scaled_voltage;
